@@ -1,123 +1,153 @@
-# Animated ASCII Fetch - PowerShell
-# Inspirat vizual de animatia din postarea Reddit; implementare PowerShell originala.
-# Ruleaza in Windows Terminal / PowerShell. Oprire: Ctrl+C.
+# Dezactivăm cursorul pentru o experiență impecabilă
+[Console]::CursorVisible = $false
+Clear-Host
 
-$ErrorActionPreference = "SilentlyContinue"
+# Pre-încărcăm datele reale ale sistemului
+$os = (Get-CimInstance Win32_OperatingSystem).Caption
+$cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+$ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$gpuInfo = Get-CimInstance Win32_VideoController | Select-Object -First 1
+$gpu = if ($gpuInfo) { $gpuInfo.Name } else { "Unknown GPU" }
+
+# Inițializare coduri de culori ANSI
+$ESC = [char]27
+$RST = "$ESC[0m"
+
+# Paleta de culori inspirată din estetica retro/hacker (Verde Neon, Gri Închis, Alb)
+$Green  = "$ESC[38;2;50;255;50m"
+$DGreen = "$ESC[38;2;20;150;20m"
+$White  = "$ESC[38;2;255;255;255m"
+$Gray   = "$ESC[38;2;170;170;170m"
+$DGray  = "$ESC[38;2;80;80;80m"
+$Cyan   = "$ESC[38;2;0;255;255m"
+
+# --- MENIUL DIN DREAPTA (Informații Sistem) ---
+$MeniuDreapta = @(
+    "$DGray┌──────$Green THE WATCHER $DGray──────",
+    "$DGray│ $Green System Analysis",
+    "$DGray│ $DGreen 💻 OS $White     $os",
+    "$DGray│ $DGreen 🖥️ RAM $White    $ram GB Memory",
+    "$DGray│",
+    "$DGray│ $Green Hardware Scan",
+    "$DGray│ $DGreen 🧠 CPU $White    $cpu",
+    "$DGray│ $DGreen 🎮 GPU $White    $gpu",
+    "$DGray│",
+    "$DGray│ $Green Execution Protocols",
+    "$DGray│ $DGreen [1]$White 👉 Initiate Install Sequence",
+    "$DGray│ $DGreen [2]$White ⚡ Override System Optimizations",
+    "$DGray│ $DGreen [3]$White 🛑 Terminate Connection",
+    "$DGray└$DGreen ─ $Green• $White─ $Green• $White─ $Green• $White─ $Green• $White─ $Green• $White─ $Green•",
+    "",
+    "$Gray> Awaiting command [1-3]: "
+)
+
+# Desenăm meniul fix o singură dată
+for ($y = 0; $y -lt $MeniuDreapta.Count; $y++) {
+    [Console]::SetCursorPosition(42, 3 + $y)
+    Write-Host $MeniuDreapta[$y] -NoNewline
+}
+
+# --- ANIMAȚIA OCHIULUI MISTIC ---
+# Definim piramida statică (structura de bază, fără ochi)
+$PiramidaBase = @(
+    "            $Green.$RST",
+    "           $Green/ \$RST",
+    "          $Green/   \$RST",
+    "         $Green/     \$RST",
+    "        $Green/       \$RST",
+    "       $Green/  $DGreen.---.$Green  \$RST",
+    "      $Green/  $DGreen/     \$Green  \$RST",
+    "     $Green/  $DGreen|       |$Green  \$RST",
+    "    $Green/   $DGreen\     /$Green   \$RST",
+    "   $Green/     $DGreen'---'$Green     \$RST",
+    "  $Green/                 \$RST",
+    " $Green/                   \$RST",
+    "$Green/_____________________\$RST"
+)
+
+# Desenăm baza piramidei
+for ($y = 0; $y -lt $PiramidaBase.Count; $y++) {
+    [Console]::SetCursorPosition(10, 5 + $y)
+    Write-Host $PiramidaBase[$y] -NoNewline
+}
+
+# Coordonatele pentru interiorul ochiului (unde vom desena pupila)
+$OchiY_Start = 11  # Rândul 6 din piramidă (0-indexed) este rândul 11 pe ecran (5 + 6)
+$OchiY_Middle = 12 # Rândul 12 pe ecran
+$OchiY_End = 13    # Rândul 13 pe ecran
+
+# Definim stările ochiului (Pupila privește: Centru, Stânga, Dreapta)
+$Ochi_Centru = @(
+    "$DGreen/ $White.-. $DGreen\$RST",
+    "$DGreen| $White( $CyanO $White) $DGreen|$RST",
+    "$DGreen\ $White'-' $DGreen/$RST"
+)
+
+$Ochi_Stanga = @(
+    "$DGreen/ $White.-. $DGreen\$RST",
+    "$DGreen| $White($CyanO  $White) $DGreen|$RST",
+    "$DGreen\ $White'-' $DGreen/$RST"
+)
+
+$Ochi_Dreapta = @(
+    "$DGreen/ $White.-. $DGreen\$RST",
+    "$DGreen| $White(  $CyanO$White) $DGreen|$RST",
+    "$DGreen\ $White'-' $DGreen/$RST"
+)
+
+# Secvența de animație (stările ochiului)
+$SecventaAnimatie = @($Ochi_Centru, $Ochi_Stanga, $Ochi_Centru, $Ochi_Dreapta)
+$count = 0
+
 try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    [Console]::CursorVisible = $false
-    [Console]::Clear()
-
-    $pink = [ConsoleColor]::Magenta
-    $hotPink = [ConsoleColor]::DarkMagenta
-    $white = [ConsoleColor]::Gray
-    $cyan = [ConsoleColor]::Cyan
-    $green = [ConsoleColor]::Green
-    $red = [ConsoleColor]::Red
-    $yellow = [ConsoleColor]::Yellow
-
-    # Pastreaza animatia in stanga si informatiile in dreapta.
-    $consoleWidth = [Math]::Max(80, [Console]::WindowWidth)
-    $consoleHeight = [Math]::Max(25, [Console]::WindowHeight)
-    $centerX = [Math]::Min(24, [int]($consoleWidth * 0.27))
-    $centerY = [int]($consoleHeight / 2)
-    $radiusX = [Math]::Min(17, [int]($consoleWidth * 0.19))
-    $radiusY = [Math]::Min(9, [int]($consoleHeight * 0.34))
-    $innerX = [int]($radiusX * 0.43)
-    $innerY = [int]($radiusY * 0.48)
-    $panelX = [Math]::Min(($centerX + $radiusX + 5), [int]($consoleWidth * 0.52))
-    $panelY = [Math]::Max(1, $centerY - 8)
-
-    $os = (Get-CimInstance Win32_OperatingSystem).Caption
-    $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
-    $gpu = (Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Microsoft Basic' } | Select-Object -First 1).Name
-    $ramTotal = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
-    $ramUsed = [Math]::Round(($ramTotal - ((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB)), 1)
-    $uptime = (Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($env:SystemDrive)'"
-    $diskUsed = [Math]::Round(($disk.Size - $disk.FreeSpace) / 1GB, 1)
-    $diskTotal = [Math]::Round($disk.Size / 1GB, 1)
-    $userName = "$env:USERNAME@$env:COMPUTERNAME"
-
-    function Write-At([int]$X, [int]$Y, [string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray) {
-        if ($Y -ge 0 -and $Y -lt [Console]::WindowHeight -and $X -ge 0 -and $X -lt [Console]::WindowWidth) {
-            [Console]::SetCursorPosition($X, $Y)
-            [Console]::ForegroundColor = $Color
-            $max = [Console]::WindowWidth - $X
-            if ($Text.Length -gt $max) { $Text = $Text.Substring(0, [Math]::Max(0, $max)) }
-            [Console]::Write($Text)
-        }
+    # Bucla principală: Cât timp nu se apasă nicio tastă, ochiul se mișcă
+    while (-not [Console]::KeyAvailable) {
+        # Selectăm starea curentă din secvență
+        $StareCurenta = $SecventaAnimatie[$count % $SecventaAnimatie.Count]
+        
+        # Redesenăm DOAR interiorul ochiului pentru a evita pâlpâirea
+        # Poziția X=19 este calculată pentru a se potrivi exact în interiorul piramidei
+        [Console]::SetCursorPosition(19, $OchiY_Start)
+        Write-Host $StareCurenta[0] -NoNewline
+        
+        [Console]::SetCursorPosition(19, $OchiY_Middle)
+        Write-Host $StareCurenta[1] -NoNewline
+        
+        [Console]::SetCursorPosition(19, $OchiY_End)
+        Write-Host $StareCurenta[2] -NoNewline
+        
+        $count++
+        
+        # Viteza cu care ochiul scrutează încăperea
+        Start-Sleep -Milliseconds 700
     }
 
-    function Draw-Panel {
-        $lines = @(
-            "System Information",
-            "OS       $os",
-            "Shell    PowerShell $($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor)",
-            "Host     $userName",
-            "Uptime   $([int]$uptime.TotalDays)d $($uptime.Hours)h $($uptime.Minutes)m",
-            "Packages Windows",
-            "",
-            "Hardware Information",
-            "CPU      $cpu",
-            "GPU      $gpu",
-            "Memory   $ramUsed / $ramTotal GiB",
-            "Disk (C) $diskUsed / $diskTotal GiB"
-        )
-        $boxWidth = [Math]::Min(58, [Console]::WindowWidth - $panelX - 2)
-        if ($boxWidth -lt 20) { return }
-        Write-At $panelX ($panelY - 1) ("┌" + ("─" * ($boxWidth - 2)) + "┐") $white
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            $line = $lines[$i]
-            if ($line.Length -gt ($boxWidth - 4)) { $line = $line.Substring(0, $boxWidth - 4) }
-            $color = $white
-            if ($i -eq 0 -or $i -eq 7) { $color = $cyan }
-            elseif ($line -match '^(OS|CPU|GPU|Memory|Disk|Uptime|Shell|Host|Packages)') { $color = $green }
-            Write-At $panelX ($panelY + $i) ("│ " + $line.PadRight($boxWidth - 4) + " │") $color
+    # Citim comanda utilizatorului
+    $optiune = [Console]::ReadKey($true).KeyChar
+    Clear-Host
+
+    # Executăm opțiunea
+    switch ($optiune) {
+        "1" { 
+            Write-Host "🚀 Initiating Install Sequence..." -ForegroundColor Green
+            # Aici pui comenzile tale winget/choco
+            Start-Sleep -Seconds 2 
         }
-        Write-At $panelX ($panelY + $lines.Count) ("└" + ("─" * ($boxWidth - 2)) + "┘") $white
-        Write-At $panelX ($panelY + $lines.Count + 2) "● ● ● ● ● ● ●" $pink
-    }
-
-    $frame = 0
-    while ($true) {
-        # Sterge doar zona animatiei, pentru a evita palpairea intregului terminal.
-        for ($y = [Math]::Max(0, $centerY - $radiusY - 2); $y -le [Math]::Min([Console]::WindowHeight - 1, $centerY + $radiusY + 2); $y++) {
-            Write-At 0 $y (" " * [Math]::Min($panelX - 2, [Console]::WindowWidth))
+        "2" { 
+            Write-Host "⚡ Overriding System Optimizations..." -ForegroundColor Cyan
+            Start-Sleep -Seconds 2 
         }
-
-        # Inel exterior punctat, cu un punct luminos care se deplaseaza.
-        for ($a = 0; $a -lt 360; $a += 7) {
-            $rad = $a * [Math]::PI / 180
-            $x = [int][Math]::Round($centerX + $radiusX * [Math]::Cos($rad))
-            $y = [int][Math]::Round($centerY + $radiusY * [Math]::Sin($rad))
-            $distance = [Math]::Abs((($a - ($frame * 7)) % 360 + 360) % 360)
-            if ($distance -lt 12 -or $distance -gt 348) { $c = $pink } else { $c = $hotPink }
-            Write-At $x $y "●" $c
+        "3" { 
+            Write-Host "Connection Terminated." -ForegroundColor Gray
+            Exit 
         }
-
-        # Inel interior si puncte care dau impresia de miscare/rotatie.
-        for ($a = 0; $a -lt 360; $a += 18) {
-            $rad = ($a - $frame * 4) * [Math]::PI / 180
-            $x = [int][Math]::Round($centerX + $innerX * [Math]::Cos($rad))
-            $y = [int][Math]::Round($centerY + $innerY * [Math]::Sin($rad))
-            Write-At $x $y "●" $pink
+        default { 
+            Write-Host "❌ Invalid Command. Connection Terminated." -ForegroundColor Red
+            Exit 
         }
-
-        # Punct orbital care se roteste in interior.
-        $orbit = ($frame * 11) * [Math]::PI / 180
-        $ox = [int][Math]::Round($centerX + ($innerX * 0.72) * [Math]::Cos($orbit))
-        $oy = [int][Math]::Round($centerY + ($innerY * 0.72) * [Math]::Sin($orbit))
-        Write-At $ox $oy "●" $white
-
-        Draw-Panel
-        Write-At 1 ([Console]::WindowHeight - 2) "Ctrl+C pentru iesire" $white
-        $frame++
-        Start-Sleep -Milliseconds 75
     }
 }
 finally {
-    [Console]::ResetColor()
+    # Reactivăm cursorul la ieșire
     [Console]::CursorVisible = $true
-    [Console]::WriteLine()
 }
