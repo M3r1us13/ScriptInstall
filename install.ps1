@@ -5,4 +5,5 @@ Write-Host "Sistemul tău de operare este: $(Get-CimInstance Win32_OperatingSyst
 Write-Host "Bine Pa" -ForegroundColor Red
 Write-Host "Bine Pa" -ForegroundColor Green
 Write-Host "Bine Pa" -ForegroundColor Blue
+Write-Host "Bine Pa" -ForegroundColor Magenta
 Write-Host "=====================================" -ForegroundColor Cyan
