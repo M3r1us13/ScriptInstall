@@ -159,15 +159,124 @@ function Show-Status {
     if ($script:statusLabel) { $script:statusLabel.Text = $Message }
 }
 
+function New-DesktopShortcutFromStartMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppName
+    )
+
+try {
+        $desktopPath = [Environment]::GetFolderPath('Desktop')
+
+$startMenuPaths = @(
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+        )
+
+$shortcut = $null
+
+foreach ($startMenuPath in $startMenuPaths) {
+            if (-not (Test-Path $startMenuPath)) {
+                continue
+            }
+
+$shortcut = Get-ChildItem `
+                -Path $startMenuPath `
+                -Filter '*.lnk' `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.BaseName -like "*$AppName*"
+                } |
+                Select-Object -First 1
+
+if ($shortcut) {
+                break
+            }
+        }
+
+if (-not $shortcut) {
+            return $false
+        }
+
+$desktopShortcut = Join-Path `
+            $desktopPath `
+            ($shortcut.Name)
+
+Copy-Item `
+            -Path $shortcut.FullName `
+            -Destination $desktopShortcut `
+            -Force `
+            -ErrorAction Stop
+
+return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Install-WingetPackage {
-    param([string]$Id, [string]$Name)
-    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
-        [System.Windows.Forms.MessageBox]::Show('winget nu este instalat. Instaleaza App Installer din Microsoft Store.','Windows Toolkit')
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Id,
+
+[Parameter(Mandatory = $true)]
+        [string]$Name,
+
+[bool]$CreateShortcut = $true
+    )
+
+if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'winget nu este instalat. Instaleaza App Installer din Microsoft Store.',
+            'Windows Toolkit'
+        )
         return
     }
-    Show-Status "Se instaleaza $Name..."
-    Start-Process winget.exe -ArgumentList "install --id $Id --exact --accept-package-agreements --accept-source-agreements" -Wait
+
+Show-Status "Se instaleaza $Name fara confirmari..."
+
+$arguments = @(
+        'install',
+        '--id', $Id,
+        '--exact',
+        '--silent',
+        '--accept-package-agreements',
+        '--accept-source-agreements',
+        '--disable-interactivity'
+    )
+
+$process = Start-Process `
+        -FilePath 'winget.exe' `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden
+
+if ($process.ExitCode -eq 0) {
+        Start-Sleep -Seconds 2
+
+if ($CreateShortcut) {
+            $shortcutCreated = New-DesktopShortcutFromStartMenu -AppName $Name
+
+if ($shortcutCreated) {
+                Show-Status "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
+            }
+            else {
+                Show-Status "$Name a fost instalat, dar shortcut-ul nu a fost gasit."
+            }
+        }
+        else {
+            Show-Status "$Name a fost instalat."
+        }
+    }
+    else {
+        Show-Status "Instalarea pentru $Name a esuat. Cod: $($process.ExitCode)"
+    }
 }
+
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Windows Toolkit'
@@ -185,42 +294,81 @@ $form.Controls.Add($tabs)
 $tabApps = New-Object System.Windows.Forms.TabPage
 $tabApps.Text = 'Install Apps'
 [void]$tabs.TabPages.Add($tabApps)
+
 $appList = @(
-    @('Google Chrome','Google.Chrome'),
-    @('Brave','Brave.Brave'),
-    @('Adobe Acrobat Reader','Adobe.Acrobat.Reader.64-bit'),
-    @('TeamViewer','TeamViewer.TeamViewer'),
-    @('AnyDesk','AnyDeskSoftwareGmbH.AnyDesk'),
-    @('WinRAR','RARLab.WinRAR'),
-    @('VLC Media Player','VideoLAN.VLC'),
-    @('7-Zip','7zip.7zip'),
-    @('Spotify','Spotify.Spotify'),
-    @('Notepad++','Notepad++.Notepad++')
+    @('Google Chrome', 'Google.Chrome'),
+    @('Brave', 'Brave.Brave'),
+    @('Adobe Acrobat Reader', 'Adobe.Acrobat.Reader.64-bit'),
+    @('TeamViewer', 'TeamViewer.TeamViewer'),
+    @('UltraViewer', 'DucFabulous.UltraViewer'),
+    @('AnyDesk', 'AnyDeskSoftwareGmbH.AnyDesk'),
+    @('WinRAR', 'RARLab.WinRAR'),
+    @('VLC Media Player', 'VideoLAN.VLC'),
+    @('7-Zip', '7zip.7zip'),
+    @('Spotify', 'Spotify.Spotify'),
+    @('Notepad++', 'Notepad++.Notepad++')
 )
+
 $appChecks = @()
+
 for ($i = 0; $i -lt $appList.Count; $i++) {
     $check = New-Object System.Windows.Forms.CheckBox
     $check.Text = $appList[$i][0]
     $check.Tag = $appList[$i][1]
-    $check.Location = New-Object System.Drawing.Point(25, (15 + ($i * 29)))
+    $check.Location = New-Object System.Drawing.Point(
+        25,
+        (15 + ($i * 29))
+    )
     $check.AutoSize = $true
-    $tabApps.Controls.Add($check)
+
+$tabApps.Controls.Add($check)
     $appChecks += $check
 }
+
+$shortcutCheck = New-Object System.Windows.Forms.CheckBox
+$shortcutCheck.Text = 'Create Desktop Shortcuts'
+$shortcutCheck.Location = New-Object System.Drawing.Point(25, 335)
+$shortcutCheck.AutoSize = $true
+$shortcutCheck.Checked = $true
+$tabApps.Controls.Add($shortcutCheck)
+
 $installButton = New-Object System.Windows.Forms.Button
 $installButton.Text = 'Install Selected'
 $installButton.Size = New-Object System.Drawing.Size(160, 38)
-$installButton.Location = New-Object System.Drawing.Point(205, 325)
+$installButton.Location = New-Object System.Drawing.Point(205, 365)
 $tabApps.Controls.Add($installButton)
+
 $installButton.Add_Click({
-    $selected = @($appChecks | Where-Object { $_.Checked })
-    if ($selected.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show('Selecteaza cel putin o aplicatie.','Windows Toolkit')
+    $selected = @(
+        $appChecks |
+            Where-Object { $_.Checked }
+    )
+
+if ($selected.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Selecteaza cel putin o aplicatie.',
+            'Windows Toolkit'
+        )
         return
     }
-    foreach ($item in $selected) { Install-WingetPackage -Id $item.Tag -Name $item.Text }
-    Show-Status 'Instalarea aplicatiilor s-a terminat.'
+
+$installButton.Enabled = $false
+
+try {
+        foreach ($item in $selected) {
+            Install-WingetPackage `
+                -Id $item.Tag `
+                -Name $item.Text `
+                -CreateShortcut $shortcutCheck.Checked
+        }
+
+Show-Status 'Instalarea aplicatiilor s-a terminat.'
+    }
+    finally {
+        $installButton.Enabled = $true
+    }
 })
+
 # 2. System
 $tabSystem = New-Object System.Windows.Forms.TabPage
 $tabSystem.Text = 'System'
