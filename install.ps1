@@ -250,6 +250,10 @@ if (-not (Test-Path -LiteralPath $Destination)) {
             throw "Fisierul nu a fost gasit dupa descarcare: $Destination"
         }
 
+if ((Get-Item -LiteralPath $Destination -ErrorAction Stop).Length -eq 0) {
+            throw "Fisierul descarcat este gol: $Destination"
+        }
+
 Show-Status -Message 'Descarcarea s-a terminat.'
         return $true
     }
@@ -760,143 +764,227 @@ Show-Status 'Dark Mode a fost aplicat.'
     }
 })
 
-# ==================================================
-# Meniu contextual Windows 10 / Windows 11
-# ==================================================
-
-# ==================================================
-# Meniu contextual Windows 10 / Windows 11
-# ==================================================
-
 # ==============================
-# Meniu contextual Windows 10/11
-# Fara restart Explorer
-# Fara File Explorer
-# Fara delogare
+# Meniu contextual Windows 11
 # ==============================
 
-$oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
-$oldMenuPath = Join-Path $oldMenuRoot 'InprocServer32'
+$oldMenuSubKey = 'Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
+$oldMenuPath = "HKCU:\$oldMenuSubKey"
+$oldMenuInprocSubKey = "$oldMenuSubKey\InprocServer32"
+$windowsBuild = 0
+[void][int]::TryParse([string]$os.BuildNumber, [ref]$windowsBuild)
 
 $oldMenuLabel = New-Object System.Windows.Forms.Label
-$oldMenuLabel.Text = 'Context Menu:'
+$oldMenuLabel.Text = 'Windows 11 context menu:'
 $oldMenuLabel.Location = New-Object System.Drawing.Point(25, 215)
 $oldMenuLabel.AutoSize = $true
 $tabSystem.Controls.Add($oldMenuLabel)
 
 $oldMenuInfoLabel = New-Object System.Windows.Forms.Label
-$oldMenuInfoLabel.Text = 'Modificarea se aplica la urmatoarea incarcare a Explorer.'
+$oldMenuInfoLabel.Text = if ($windowsBuild -ge 22000) {
+    'Alege meniul clasic sau cel nou. Explorer se va reporni.'
+}
+else {
+    'Optiunile sunt doar pentru Windows 11; Windows 10 foloseste deja meniul clasic.'
+}
 $oldMenuInfoLabel.Location = New-Object System.Drawing.Point(25, 235)
 $oldMenuInfoLabel.AutoSize = $true
 $tabSystem.Controls.Add($oldMenuInfoLabel)
 
-# ==============================
-# Enable Old Menu
-# ==============================
+function Restart-ExplorerForMenuChange {
+    $currentSessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+    $explorerProcesses = @(
+        Get-Process -Name explorer -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -eq $currentSessionId }
+    )
+    foreach ($explorerProcess in $explorerProcesses) {
+        Stop-Process -Id $explorerProcess.Id -Force -ErrorAction Stop
+    }
+
+    foreach ($explorerProcess in $explorerProcesses) {
+        try {
+            Wait-Process -Id $explorerProcess.Id -Timeout 10 -ErrorAction Stop
+        }
+        catch {
+            if (Get-Process -Id $explorerProcess.Id -ErrorAction SilentlyContinue) {
+                throw "Explorer (PID $($explorerProcess.Id)) nu s-a inchis."
+            }
+        }
+    }
+
+    if (-not (
+        Get-Process -Name explorer -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -eq $currentSessionId }
+    )) {
+        Start-Process -FilePath "$env:WINDIR\explorer.exe" -ErrorAction Stop
+    }
+
+    $deadline = (Get-Date).AddSeconds(15)
+    while (-not (
+        Get-Process -Name explorer -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -eq $currentSessionId }
+    )) {
+        if ((Get-Date) -ge $deadline) {
+            throw 'Explorer nu a repornit in intervalul asteptat.'
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+function Set-Windows11ContextMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]$UseClassicMenu
+    )
+
+    if ($windowsBuild -lt 22000) {
+        throw 'Aceasta setare este doar pentru Windows 11. Windows 10 foloseste deja meniul contextual clasic.'
+    }
+
+    $registryKey = $null
+    try {
+        $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $UseClassicMenu)
+        $overrideExists = $null -ne $registryKey
+        $currentlyClassic = $false
+        if ($null -ne $registryKey) {
+            $defaultValue = $registryKey.GetValue('', $null)
+            $currentlyClassic = ($defaultValue -is [string] -and $defaultValue -eq '')
+            $registryKey.Close()
+            $registryKey = $null
+        }
+
+        if (($UseClassicMenu -and $currentlyClassic) -or (-not $UseClassicMenu -and -not $overrideExists)) {
+            return $false
+        }
+
+        if ($UseClassicMenu) {
+            $registryKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($oldMenuInprocSubKey)
+            if ($null -eq $registryKey) {
+                throw 'Nu s-a putut crea cheia de registru pentru meniul clasic.'
+            }
+
+            $registryKey.SetValue('', '', [Microsoft.Win32.RegistryValueKind]::String)
+            $registryKey.Flush()
+        }
+        elseif (Test-Path -LiteralPath $oldMenuPath) {
+            [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($oldMenuSubKey, $false)
+        }
+
+        $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $false)
+        $overrideExists = $null -ne $registryKey
+        $classicMenuIsSet = $false
+        if ($null -ne $registryKey) {
+            $defaultValue = $registryKey.GetValue('', $null)
+            $registryKey.Close()
+            $registryKey = $null
+            $classicMenuIsSet = ($defaultValue -is [string] -and $defaultValue -eq '')
+        }
+
+        if (($UseClassicMenu -and -not $classicMenuIsSet) -or (-not $UseClassicMenu -and $overrideExists)) {
+            throw 'Verificarea setarii din registru nu a reusit.'
+        }
+
+        return $true
+    }
+    finally {
+        if ($null -ne $registryKey) {
+            $registryKey.Close()
+        }
+    }
+
+}
 
 $oldMenuButton = New-Object System.Windows.Forms.Button
-$oldMenuButton.Text = 'Enable Old Menu'
+$oldMenuButton.Text = 'Activeaza meniul clasic'
 $oldMenuButton.Location = New-Object System.Drawing.Point(25, 265)
-$oldMenuButton.Size = New-Object System.Drawing.Size(150, 38)
+$oldMenuButton.Size = New-Object System.Drawing.Size(165, 38)
+$oldMenuButton.Enabled = $windowsBuild -ge 22000
 $tabSystem.Controls.Add($oldMenuButton)
 
 $oldMenuButton.Add_Click({
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        'Se va activa meniul contextual clasic si se va reporni Explorer. Ferestrele File Explorer deschise se pot inchide. Continui?',
+        'Confirmare - Meniu clasic',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $oldMenuButton.Enabled = $false
+    $restoreMenuButton.Enabled = $false
     try {
-        $oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
-        $oldMenuPath = Join-Path $oldMenuRoot 'InprocServer32'
-
-Show-Status 'Se activeaza meniul contextual vechi...'
-
-# Creeaza cheia pentru meniul contextual Windows 10
-        New-Item `
-            -Path $oldMenuPath `
-            -Force `
-            -ErrorAction Stop | Out-Null
-
-# Valoare implicita goala - necesara pentru activare
-        Set-Item `
-            -Path $oldMenuPath `
-            -Value ([string]::Empty) `
-            -ErrorAction Stop
-
-# Verifica daca cheia exista
-        if (-not (Test-Path $oldMenuPath)) {
-            throw 'Cheia meniului contextual nu a fost creata.'
+        Show-Status 'Se activeaza meniul contextual clasic...'
+        $changed = Set-Windows11ContextMenu -UseClassicMenu $true
+        if ($changed) {
+            Restart-ExplorerForMenuChange
+            Show-Status 'Meniul contextual clasic este activ. Explorer a repornit.'
         }
-
-Show-Status 'Meniul vechi a fost activat. Se reincarca Explorer...'
-
-# Inchide o singura data Explorer
-        Get-Process explorer -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-# Pauza scurta pentru inchiderea completa
-        Start-Sleep -Milliseconds 800
-
-# Porneste din nou Explorer
-        Start-Process explorer.exe
-
-Show-Status 'Meniul contextual vechi este activ.'
+        else {
+            Show-Status 'Meniul contextual clasic este deja activ.'
+        }
     }
     catch {
-        Show-Status 'Activarea meniului vechi a esuat.'
-
-[System.Windows.Forms.MessageBox]::Show(
-            "Eroare:`r`n$($_.Exception.Message)",
+        Show-Status 'Activarea meniului contextual clasic a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            "Eroare la activarea meniului contextual clasic:`r`n$($_.Exception.Message)",
             'Windows Toolkit - Eroare',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
+    }
+    finally {
+        $oldMenuButton.Enabled = $true
+        $restoreMenuButton.Enabled = $true
     }
 })
 
-
-
-
-# ==============================
-# Restore Windows 11
-# ==============================
-
 $restoreMenuButton = New-Object System.Windows.Forms.Button
-$restoreMenuButton.Text = 'Restore Windows 11'
+$restoreMenuButton.Text = 'Meniu nou Windows 11'
 $restoreMenuButton.Location = New-Object System.Drawing.Point(190, 265)
-$restoreMenuButton.Size = New-Object System.Drawing.Size(165, 38)
+$restoreMenuButton.Size = New-Object System.Drawing.Size(175, 38)
+$restoreMenuButton.Enabled = $windowsBuild -ge 22000
 $tabSystem.Controls.Add($restoreMenuButton)
 
 $restoreMenuButton.Add_Click({
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        'Se va elimina modificarea meniului clasic si se va reporni Explorer. Ferestrele File Explorer deschise se pot inchide. Continui?',
+        'Confirmare - Meniu Windows 11',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $oldMenuButton.Enabled = $false
+    $restoreMenuButton.Enabled = $false
     try {
-        $oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
-
-Show-Status 'Se restaureaza meniul Windows 11...'
-
-if (Test-Path $oldMenuRoot) {
-            Remove-Item `
-                -Path $oldMenuRoot `
-                -Recurse `
-                -Force `
-                -ErrorAction Stop
+        Show-Status 'Se restaureaza meniul contextual Windows 11...'
+        $changed = Set-Windows11ContextMenu -UseClassicMenu $false
+        if ($changed) {
+            Restart-ExplorerForMenuChange
+            Show-Status 'Meniul contextual Windows 11 este activ. Explorer a repornit.'
         }
-
-Start-Sleep -Milliseconds 300
-
-# Un singur restart Explorer pentru aplicarea modificarii
-        Get-Process explorer -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-Start-Sleep -Milliseconds 800
-        Start-Process explorer.exe
-
-Show-Status 'Meniul Windows 11 este activ.'
+        else {
+            Show-Status 'Meniul contextual Windows 11 este deja activ.'
+        }
     }
     catch {
-        Show-Status 'Restaurarea meniului Windows 11 a esuat.'
-
-[System.Windows.Forms.MessageBox]::Show(
-            "Eroare:`r`n$($_.Exception.Message)",
+        Show-Status 'Restaurarea meniului contextual Windows 11 a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            "Eroare la restaurarea meniului contextual Windows 11:`r`n$($_.Exception.Message)",
             'Windows Toolkit - Eroare',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
+    }
+    finally {
+        $oldMenuButton.Enabled = $true
+        $restoreMenuButton.Enabled = $true
     }
 })
 
@@ -1194,34 +1282,111 @@ $tabActivation.Text = 'Windows / Office'
 [void]$tabs.TabPages.Add($tabActivation)
 
 $activationInfo = New-Object System.Windows.Forms.Label
-$activationInfo.Text = 'Necesita PowerShell pornit ca Administrator. Comenzile ruleaza in consola curenta.'
+$activationInfo.Text = 'Porneste PowerShell ca Administrator.'
 $activationInfo.Location = New-Object System.Drawing.Point(25, 25)
-$activationInfo.Size = New-Object System.Drawing.Size(520, 35)
+$activationInfo.AutoSize = $true
 $tabActivation.Controls.Add($activationInfo)
 
 $hwidButton = New-Object System.Windows.Forms.Button
-$hwidButton.Text = 'HWID - Windows'
+$hwidButton.Text = '1. Activeaza Windows'
 $hwidButton.Location = New-Object System.Drawing.Point(25, 70)
-$hwidButton.Size = New-Object System.Drawing.Size(220, 40)
+$hwidButton.Size = New-Object System.Drawing.Size(250, 40)
 $tabActivation.Controls.Add($hwidButton)
 
 $ohookButton = New-Object System.Windows.Forms.Button
-$ohookButton.Text = 'Ohook - Office'
+$ohookButton.Text = '2. Activeaza Office'
 $ohookButton.Location = New-Object System.Drawing.Point(270, 70)
-$ohookButton.Size = New-Object System.Drawing.Size(220, 40)
+$ohookButton.Size = New-Object System.Drawing.Size(250, 40)
 $tabActivation.Controls.Add($ohookButton)
 
 $tsforgeButton = New-Object System.Windows.Forms.Button
-$tsforgeButton.Text = 'TSforge - Windows / Office / ESU'
-$tsforgeButton.Location = New-Object System.Drawing.Point(25, 125)
-$tsforgeButton.Size = New-Object System.Drawing.Size(220, 45)
+$tsforgeButton.Text = '3. Activeaza Windows / Office'
+$tsforgeButton.Location = New-Object System.Drawing.Point(25, 130)
+$tsforgeButton.Size = New-Object System.Drawing.Size(250, 45)
 $tabActivation.Controls.Add($tsforgeButton)
 
 $kmsButton = New-Object System.Windows.Forms.Button
-$kmsButton.Text = 'Online KMS - Windows / Office'
-$kmsButton.Location = New-Object System.Drawing.Point(270, 125)
-$kmsButton.Size = New-Object System.Drawing.Size(220, 45)
+$kmsButton.Text = '4. Activare KMS - pana la 180 zile'
+$kmsButton.Location = New-Object System.Drawing.Point(270, 130)
+$kmsButton.Size = New-Object System.Drawing.Size(250, 45)
 $tabActivation.Controls.Add($kmsButton)
+
+$kmsInfo = New-Object System.Windows.Forms.Label
+$kmsInfo.Text = 'Pentru organizatii cu server KMS.'
+$kmsInfo.Location = New-Object System.Drawing.Point(270, 177)
+$kmsInfo.AutoSize = $true
+$tabActivation.Controls.Add($kmsInfo)
+
+$officeDownloadButton = New-Object System.Windows.Forms.Button
+$officeDownloadButton.Text = '5. Instaleaza Microsoft 365'
+$officeDownloadButton.Location = New-Object System.Drawing.Point(25, 210)
+$officeDownloadButton.Size = New-Object System.Drawing.Size(300, 42)
+$tabActivation.Controls.Add($officeDownloadButton)
+
+$officeDownloadButton.Add_Click({
+    $officeDownloadButton.Enabled = $false
+    $installerPath = $null
+    try {
+        $downloadsPath = $null
+        $shellFoldersPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+        $downloadsProperty = '{374DE290-123F-4565-9164-39C4925E467B}'
+        $shellFolders = Get-ItemProperty -Path $shellFoldersPath -ErrorAction SilentlyContinue
+        if ($shellFolders) {
+            $configuredDownloads = $shellFolders.PSObject.Properties[$downloadsProperty].Value
+            if ($configuredDownloads) {
+                $downloadsPath = [Environment]::ExpandEnvironmentVariables($configuredDownloads)
+            }
+        }
+
+        if (-not $downloadsPath) {
+            $shell = New-Object -ComObject Shell.Application
+            $downloadsFolder = $shell.NameSpace('shell:Downloads')
+            if ($downloadsFolder -and $downloadsFolder.Self.Path) {
+                $downloadsPath = $downloadsFolder.Self.Path
+            }
+        }
+
+        if (-not $downloadsPath) {
+            throw 'Nu s-a putut determina locatia folderului Downloads.'
+        }
+
+        $installerPath = Join-Path -Path $downloadsPath -ChildPath 'OfficeSetup.exe'
+        if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
+            Remove-Item -LiteralPath $installerPath -Force -ErrorAction Stop
+        }
+
+        $downloaded = Invoke-RemoteFileDownload `
+            -Url 'https://c2rsetup.officeapps.live.com/c2r/download.aspx?ProductreleaseID=O365ProPlusRetail&platform=x64&language=en-us&version=O16GA' `
+            -Destination $installerPath
+
+        if (-not $downloaded) {
+            return
+        }
+
+        Show-Status 'Se verifica semnatura installerului Microsoft 365...'
+        $signature = Get-AuthenticodeSignature -FilePath $installerPath -ErrorAction Stop
+        if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+            $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+            throw 'Semnatura installerului nu este valida sau nu apartine Microsoft. Fisierul nu va fi pornit.'
+        }
+
+        Show-Status 'Se porneste instalarea Microsoft 365...'
+        Start-Process -FilePath $installerPath -ErrorAction Stop
+        Show-Status 'Installerul Microsoft 365 a pornit. Urmeaza pasii din fereastra Office; poate fi necesar un cont cu licenta valida.'
+    }
+    catch {
+        Show-Status 'Descarcarea sau pornirea installerului Microsoft 365 a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+    finally {
+        $officeDownloadButton.Enabled = $true
+    }
+})
 
 $script:statusLabel = New-Object System.Windows.Forms.Label
 $script:statusLabel.Text = 'Ready'
