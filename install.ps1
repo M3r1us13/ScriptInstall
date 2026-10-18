@@ -1324,15 +1324,21 @@ function Invoke-MasActivation {
         $script:statusLabel.Refresh()
         $form.Hide()
 
-        $commandLine = '"{0}" -el -qedit {1}' -f $filePath, $activationArguments[$Method]
-        & "$env:SystemRoot\System32\cmd.exe" /d /c $commandLine
-        $exitCode = $LASTEXITCODE
+        $commandLine = '""{0}" -el -qedit {1}"' -f $filePath, $activationArguments[$Method]
+        $process = Start-Process `
+            -FilePath "$env:SystemRoot\System32\cmd.exe" `
+            -ArgumentList "/d /c $commandLine" `
+            -Wait `
+            -PassThru `
+            -NoNewWindow `
+            -ErrorAction Stop
+        $exitCode = $process.ExitCode
 
         if ($exitCode -ne 0) {
             throw "MAS s-a incheiat cu codul de iesire $exitCode."
         }
 
-        Show-Status "Operatiunea $Method s-a incheiat."
+        Show-Status "Comanda $Method s-a incheiat (cod 0). Verifica starea activarii in Windows sau Office."
     }
     catch {
         Show-Status "Operatiunea $Method a esuat."
