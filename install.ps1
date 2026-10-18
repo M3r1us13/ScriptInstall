@@ -1,7 +1,8 @@
 # Terminal animation + Windows Toolkit
 # Compatibil cu Windows PowerShell 5.1 si PowerShell 7
 
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Continue'
+
 
 $logoColor = [ConsoleColor]::DarkYellow
 $textColor = [ConsoleColor]::Gray
@@ -159,6 +160,278 @@ function Show-Status {
     if ($script:statusLabel) { $script:statusLabel.Text = $Message }
 }
 
+# ==============================
+# Windows Toolkit GUI
+# ==============================
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+# ==============================
+# Afisare status
+# ==============================
+
+function Show-Status {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+if ($null -ne $script:statusLabel) {
+        $script:statusLabel.Text = $Message
+        $script:statusLabel.Refresh()
+    }
+}
+
+# ==============================
+# Descarcare fisier
+# ==============================
+
+function Invoke-RemoteFileDownload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+
+[Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+try {
+        $folder = Split-Path `
+            -Path $Destination `
+            -Parent
+
+if (-not (Test-Path -LiteralPath $folder)) {
+            New-Item `
+                -Path $folder `
+                -ItemType Directory `
+                -Force `
+                -ErrorAction Stop | Out-Null
+        }
+
+Show-Status `
+            -Message "Se descarca $([System.IO.Path]::GetFileName($Destination))..."
+
+$bitsCommand = Get-Command `
+            -Name 'Start-BitsTransfer' `
+            -ErrorAction SilentlyContinue
+
+if ($null -ne $bitsCommand) {
+            try {
+                Start-BitsTransfer `
+                    -Source $Url `
+                    -Destination $Destination `
+                    -DisplayName 'Windows Toolkit' `
+                    -Description 'Descarcare fisier' `
+                    -ErrorAction Stop
+            }
+            catch {
+                Show-Status `
+                    -Message 'BITS a esuat. Se foloseste descarcarea alternativa.'
+
+Invoke-WebRequest `
+                    -Uri $Url `
+                    -OutFile $Destination `
+                    -UseBasicParsing `
+                    -ErrorAction Stop
+            }
+        }
+        else {
+            Invoke-WebRequest `
+                -Uri $Url `
+                -OutFile $Destination `
+                -UseBasicParsing `
+                -ErrorAction Stop
+        }
+
+if (-not (Test-Path -LiteralPath $Destination)) {
+            throw "Fisierul nu a fost gasit dupa descarcare: $Destination"
+        }
+
+Show-Status -Message 'Descarcarea s-a terminat.'
+        return $true
+    }
+    catch {
+        Show-Status -Message 'Descarcarea a esuat.'
+
+[System.Windows.Forms.MessageBox]::Show(
+            "Eroare la descarcare:`r`n$($_.Exception.Message)",
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+
+return $false
+    }
+}
+
+# ==============================
+# Creare shortcut pe Desktop
+# ==============================
+
+function New-DesktopShortcutFromStartMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppName
+    )
+
+try {
+        $desktopPath = [Environment]::GetFolderPath('Desktop')
+
+if ([string]::IsNullOrWhiteSpace($desktopPath)) {
+            return $false
+        }
+
+$startMenuPaths = @(
+            (
+                Join-Path `
+                    -Path $env:APPDATA `
+                    -ChildPath 'Microsoft\Windows\Start Menu\Programs'
+            ),
+            (
+                Join-Path `
+                    -Path $env:ProgramData `
+                    -ChildPath 'Microsoft\Windows\Start Menu\Programs'
+            )
+        )
+
+$shortcut = $null
+
+foreach ($startMenuPath in $startMenuPaths) {
+            if (-not (Test-Path -LiteralPath $startMenuPath)) {
+                continue
+            }
+
+$shortcut = Get-ChildItem `
+                -Path $startMenuPath `
+                -Filter '*.lnk' `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.BaseName -like "*$AppName*"
+                } |
+                Select-Object -First 1
+
+if ($null -ne $shortcut) {
+                break
+            }
+        }
+
+if ($null -eq $shortcut) {
+            return $false
+        }
+
+$desktopShortcut = Join-Path `
+            -Path $desktopPath `
+            -ChildPath $shortcut.Name
+
+Copy-Item `
+            -Path $shortcut.FullName `
+            -Destination $desktopShortcut `
+            -Force `
+            -ErrorAction Stop
+
+return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+# ==============================
+# Instalare aplicatie prin winget
+# ==============================
+
+function Install-WingetPackage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Id,
+
+[Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+$wingetCommand = Get-Command `
+        -Name 'winget.exe' `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $wingetCommand) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'winget nu este instalat. Instaleaza App Installer din Microsoft Store.',
+            'Windows Toolkit',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+
+return $false
+    }
+
+try {
+        Show-Status -Message "Se instaleaza $Name..."
+
+$arguments = @(
+            'install'
+            '--id'
+            $Id
+            '--exact'
+            '--silent'
+            '--accept-package-agreements'
+            '--accept-source-agreements'
+            '--disable-interactivity'
+        )
+
+$process = Start-Process `
+            -FilePath $wingetCommand.Source `
+            -ArgumentList $arguments `
+            -Wait `
+            -PassThru `
+            -WindowStyle Hidden
+
+if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+            Show-Status `
+                -Message "Instalarea pentru $Name a esuat. Cod: $($process.ExitCode)"
+
+return $false
+        }
+
+Show-Status `
+            -Message "$Name a fost instalat. Se cauta shortcut-ul..."
+
+Start-Sleep -Seconds 3
+
+$shortcutCreated = New-DesktopShortcutFromStartMenu `
+            -AppName $Name
+
+if ($shortcutCreated) {
+            Show-Status `
+                -Message "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
+        }
+        else {
+            Show-Status `
+                -Message "$Name a fost instalat, dar shortcut-ul nu a fost gasit."
+        }
+
+return $true
+    }
+    catch {
+        Show-Status `
+            -Message "Instalarea pentru $Name a esuat."
+
+[System.Windows.Forms.MessageBox]::Show(
+            "Eroare la instalarea aplicatiei ${Name}:`r`n$($_.Exception.Message)",
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+
+return $false
+    }
+}
+
+
 function New-DesktopShortcutFromStartMenu {
     param(
         [Parameter(Mandatory = $true)]
@@ -223,9 +496,7 @@ function Install-WingetPackage {
         [string]$Id,
 
 [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-[bool]$CreateShortcut = $true
+        [string]$Name
     )
 
 if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
@@ -236,7 +507,7 @@ if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
         return
     }
 
-Show-Status "Se instaleaza $Name fara confirmari..."
+Show-Status "Se instaleaza $Name ..."
 
 $arguments = @(
         'install',
@@ -249,33 +520,33 @@ $arguments = @(
     )
 
 $process = Start-Process `
-        -FilePath 'winget.exe' `
-        -ArgumentList $arguments `
-        -Wait `
-        -PassThru `
-        -WindowStyle Hidden
+    -FilePath 'winget.exe' `
+    -ArgumentList $arguments `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+
 
 if ($process.ExitCode -eq 0) {
-        Start-Sleep -Seconds 2
+        Show-Status "$Name a fost instalat. Se cauta shortcut-ul..."
 
-if ($CreateShortcut) {
-            $shortcutCreated = New-DesktopShortcutFromStartMenu -AppName $Name
+# Asteapta ca instalatorul sa creeze shortcut-ul in Start Menu
+        Start-Sleep -Seconds 3
+
+$shortcutCreated = New-DesktopShortcutFromStartMenu -AppName $Name
 
 if ($shortcutCreated) {
-                Show-Status "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
-            }
-            else {
-                Show-Status "$Name a fost instalat, dar shortcut-ul nu a fost gasit."
-            }
+            Show-Status "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
         }
         else {
-            Show-Status "$Name a fost instalat."
+            Show-Status "$Name a fost instalat, dar nu are shortcut disponibil in Start Menu."
         }
     }
     else {
         Show-Status "Instalarea pentru $Name a esuat. Cod: $($process.ExitCode)"
     }
 }
+
 
 
 $form = New-Object System.Windows.Forms.Form
@@ -325,17 +596,10 @@ $tabApps.Controls.Add($check)
     $appChecks += $check
 }
 
-$shortcutCheck = New-Object System.Windows.Forms.CheckBox
-$shortcutCheck.Text = 'Create Desktop Shortcuts'
-$shortcutCheck.Location = New-Object System.Drawing.Point(25, 335)
-$shortcutCheck.AutoSize = $true
-$shortcutCheck.Checked = $true
-$tabApps.Controls.Add($shortcutCheck)
-
 $installButton = New-Object System.Windows.Forms.Button
 $installButton.Text = 'Install Selected'
 $installButton.Size = New-Object System.Drawing.Size(160, 38)
-$installButton.Location = New-Object System.Drawing.Point(205, 365)
+$installButton.Location = New-Object System.Drawing.Point(205, 350)
 $tabApps.Controls.Add($installButton)
 
 $installButton.Add_Click({
@@ -358,8 +622,7 @@ try {
         foreach ($item in $selected) {
             Install-WingetPackage `
                 -Id $item.Tag `
-                -Name $item.Text `
-                -CreateShortcut $shortcutCheck.Checked
+                -Name $item.Text
         }
 
 Show-Status 'Instalarea aplicatiilor s-a terminat.'
@@ -374,9 +637,9 @@ $tabSystem = New-Object System.Windows.Forms.TabPage
 $tabSystem.Text = 'System'
 [void]$tabs.TabPages.Add($tabSystem)
 
-# ==============================
+# ==================================================
 # Curatare fisiere temporare
-# ==============================
+# ==================================================
 
 $tempCheck = New-Object System.Windows.Forms.CheckBox
 $tempCheck.Text = 'Remove Temporary Files'
@@ -399,26 +662,39 @@ $cleanButton.Add_Click({
         return
     }
 
-Show-Status 'Se curata fisierele temporare...'
+try {
+        Show-Status 'Se curata fisierele temporare...'
+
+$userTempPath = Join-Path $env:TEMP '*'
+        $windowsTempPath = Join-Path $env:WINDIR 'Temp\*'
 
 Remove-Item `
-        -Path "$env:TEMP\*" `
-        -Recurse `
-        -Force `
-        -ErrorAction SilentlyContinue
+            -Path $userTempPath `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
 Remove-Item `
-        -Path "$env:WINDIR\Temp\*" `
-        -Recurse `
-        -Force `
-        -ErrorAction SilentlyContinue
+            -Path $windowsTempPath `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
 Show-Status 'Fisierele temporare au fost curatate.'
+    }
+    catch {
+        Show-Status 'Curatarea fisierelor temporare a esuat.'
+
+[System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare'
+        )
+    }
 })
 
-# ==============================
+# ==================================================
 # Dark Mode
-# ==============================
+# ==================================================
 
 $darkCheck = New-Object System.Windows.Forms.CheckBox
 $darkCheck.Text = 'Dark Mode'
@@ -441,89 +717,66 @@ $darkButton.Add_Click({
         return
     }
 
-$darkPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+try {
+        $darkPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 
 New-Item `
-        -Path $darkPath `
-        -Force `
-        -ErrorAction SilentlyContinue | Out-Null
+            -Path $darkPath `
+            -Force `
+            -ErrorAction Stop | Out-Null
 
 Set-ItemProperty `
-        -Path $darkPath `
-        -Name 'AppsUseLightTheme' `
-        -Value 0 `
-        -Type DWord
+            -Path $darkPath `
+            -Name 'AppsUseLightTheme' `
+            -Value 0 `
+            -Type DWord `
+            -ErrorAction Stop
 
 Set-ItemProperty `
-        -Path $darkPath `
-        -Name 'SystemUsesLightTheme' `
-        -Value 0 `
-        -Type DWord
+            -Path $darkPath `
+            -Name 'SystemUsesLightTheme' `
+            -Value 0 `
+            -Type DWord `
+            -ErrorAction Stop
+
+# Reimprospatare non-destructiva a parametrilor Windows.
+        # Nu inchide Explorer si nu afecteaza wallpaper-ul.
+        Start-Process `
+            -FilePath "$env:WINDIR\System32\rundll32.exe" `
+            -ArgumentList 'user32.dll,UpdatePerUserSystemParameters' `
+            -WindowStyle Hidden `
+            -Wait `
+            -ErrorAction SilentlyContinue
 
 Show-Status 'Dark Mode a fost aplicat.'
+    }
+    catch {
+        Show-Status 'Aplicarea Dark Mode a esuat.'
+
+[System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare'
+        )
+    }
 })
 
-# ==============================
-# Functie pentru restart Explorer
-# ==============================
+# ==================================================
+# Meniu contextual Windows 10 / Windows 11
+# ==================================================
+
+# ==================================================
+# Meniu contextual Windows 10 / Windows 11
+# ==================================================
 
 # ==============================
-# Restart Explorer fara fereastra File Explorer
+# Meniu contextual Windows 10/11
+# Fara restart Explorer
+# Fara File Explorer
+# Fara delogare
 # ==============================
 
-$script:explorerRestartInProgress = $false
-
-function Restart-ExplorerInstant {
-    if ($script:explorerRestartInProgress) {
-        return
-    }
-
-$script:explorerRestartInProgress = $true
-
-try {
-        Show-Status 'Se aplica modificarea meniului...'
-
-# Inchide procesul Explorer
-        Stop-Process `
-            -Name 'explorer' `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-# Asteapta inchiderea completa a procesului
-        $waitCount = 0
-
-while (
-            (Get-Process -Name 'explorer' -ErrorAction SilentlyContinue) `
-            -and ($waitCount -lt 50)
-        ) {
-            Start-Sleep -Milliseconds 100
-            $waitCount++
-        }
-
-Start-Sleep -Milliseconds 500
-
-# Reporneste shell-ul Windows fara fereastra Home
-        $explorerPath = Join-Path $env:WINDIR 'explorer.exe'
-
-Start-Process `
-            -FilePath $explorerPath `
-            -ArgumentList '/restart' `
-            -WindowStyle Hidden `
-            -ErrorAction SilentlyContinue
-
-Start-Sleep -Milliseconds 1200
-
-Show-Status 'Modificarea meniului contextual a fost aplicata.'
-    }
-    finally {
-        $script:explorerRestartInProgress = $false
-    }
-}
-
-
-# ==============================
-# Meniu contextual vechi
-# ==============================
+$oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
+$oldMenuPath = Join-Path $oldMenuRoot 'InprocServer32'
 
 $oldMenuLabel = New-Object System.Windows.Forms.Label
 $oldMenuLabel.Text = 'Context Menu:'
@@ -531,77 +784,124 @@ $oldMenuLabel.Location = New-Object System.Drawing.Point(25, 215)
 $oldMenuLabel.AutoSize = $true
 $tabSystem.Controls.Add($oldMenuLabel)
 
+$oldMenuInfoLabel = New-Object System.Windows.Forms.Label
+$oldMenuInfoLabel.Text = 'Modificarea se aplica la urmatoarea incarcare a Explorer.'
+$oldMenuInfoLabel.Location = New-Object System.Drawing.Point(25, 235)
+$oldMenuInfoLabel.AutoSize = $true
+$tabSystem.Controls.Add($oldMenuInfoLabel)
+
+# ==============================
+# Enable Old Menu
+# ==============================
+
 $oldMenuButton = New-Object System.Windows.Forms.Button
 $oldMenuButton.Text = 'Enable Old Menu'
-$oldMenuButton.Location = New-Object System.Drawing.Point(25, 245)
+$oldMenuButton.Location = New-Object System.Drawing.Point(25, 265)
 $oldMenuButton.Size = New-Object System.Drawing.Size(150, 38)
 $tabSystem.Controls.Add($oldMenuButton)
 
 $oldMenuButton.Add_Click({
-    if ($script:explorerRestartInProgress) {
-        return
-    }
+    try {
+        $oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
+        $oldMenuPath = Join-Path $oldMenuRoot 'InprocServer32'
 
-try {
-        $oldMenuPath = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'
+Show-Status 'Se activeaza meniul contextual vechi...'
 
-New-Item `
+# Creeaza cheia pentru meniul contextual Windows 10
+        New-Item `
             -Path $oldMenuPath `
             -Force `
             -ErrorAction Stop | Out-Null
 
-Set-Item `
+# Valoare implicita goala - necesara pentru activare
+        Set-Item `
             -Path $oldMenuPath `
-            -Value '' `
+            -Value ([string]::Empty) `
             -ErrorAction Stop
 
-Restart-ExplorerInstant
+# Verifica daca cheia exista
+        if (-not (Test-Path $oldMenuPath)) {
+            throw 'Cheia meniului contextual nu a fost creata.'
+        }
 
-Show-Status 'Meniul contextual vechi a fost activat instant.'
+Show-Status 'Meniul vechi a fost activat. Se reincarca Explorer...'
+
+# Inchide o singura data Explorer
+        Get-Process explorer -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+# Pauza scurta pentru inchiderea completa
+        Start-Sleep -Milliseconds 800
+
+# Porneste din nou Explorer
+        Start-Process explorer.exe
+
+Show-Status 'Meniul contextual vechi este activ.'
     }
     catch {
         Show-Status 'Activarea meniului vechi a esuat.'
 
 [System.Windows.Forms.MessageBox]::Show(
-            $_.Exception.Message,
-            'Windows Toolkit - Eroare'
-        )
+            "Eroare:`r`n$($_.Exception.Message)",
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
     }
 })
 
+
+
+
+# ==============================
+# Restore Windows 11
+# ==============================
+
 $restoreMenuButton = New-Object System.Windows.Forms.Button
 $restoreMenuButton.Text = 'Restore Windows 11'
-$restoreMenuButton.Location = New-Object System.Drawing.Point(190, 245)
+$restoreMenuButton.Location = New-Object System.Drawing.Point(190, 265)
 $restoreMenuButton.Size = New-Object System.Drawing.Size(165, 38)
 $tabSystem.Controls.Add($restoreMenuButton)
 
 $restoreMenuButton.Add_Click({
-    if ($script:explorerRestartInProgress) {
-        return
-    }
-
-try {
+    try {
         $oldMenuRoot = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
 
-Remove-Item `
-            -Path $oldMenuRoot `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue
+Show-Status 'Se restaureaza meniul Windows 11...'
 
-Restart-ExplorerInstant
+if (Test-Path $oldMenuRoot) {
+            Remove-Item `
+                -Path $oldMenuRoot `
+                -Recurse `
+                -Force `
+                -ErrorAction Stop
+        }
 
-Show-Status 'Meniul Windows 11 a fost restaurat instant.'
+Start-Sleep -Milliseconds 300
+
+# Un singur restart Explorer pentru aplicarea modificarii
+        Get-Process explorer -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+Start-Sleep -Milliseconds 800
+        Start-Process explorer.exe
+
+Show-Status 'Meniul Windows 11 este activ.'
     }
     catch {
         Show-Status 'Restaurarea meniului Windows 11 a esuat.'
 
 [System.Windows.Forms.MessageBox]::Show(
-            $_.Exception.Message,
-            'Windows Toolkit - Eroare'
-        )
+            "Eroare:`r`n$($_.Exception.Message)",
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
     }
 })
+
+
+
 
 # 3. Performance
 $tabPerformance = New-Object System.Windows.Forms.TabPage
@@ -885,69 +1185,189 @@ Show-Status 'Nu exista setari salvate de restaurat.'
 })
 
 
-# 4. Office
-$tabOffice = New-Object System.Windows.Forms.TabPage
-$tabOffice.Text = 'Office'
-[void]$tabs.TabPages.Add($tabOffice)
-$officeLabel = New-Object System.Windows.Forms.Label
-$officeLabel.Text = 'Microsoft Office se descarca numai din surse oficiale:'
-$officeLabel.Location = New-Object System.Drawing.Point(25, 25)
-$officeLabel.AutoSize = $true
-$tabOffice.Controls.Add($officeLabel)
-$officeButton = New-Object System.Windows.Forms.Button
-$officeButton.Text = 'Open Office.com'
-$officeButton.Location = New-Object System.Drawing.Point(25, 65)
-$officeButton.Size = New-Object System.Drawing.Size(180, 40)
-$tabOffice.Controls.Add($officeButton)
-$officeButton.Add_Click({
-    Start-Process 'https://www.office.com/'
-    Show-Status 'Pagina oficiala Office a fost deschisa.'
-})
-$microsoft365Button = New-Object System.Windows.Forms.Button
-$microsoft365Button.Text = 'Microsoft 365 Download'
-$microsoft365Button.Location = New-Object System.Drawing.Point(220, 65)
-$microsoft365Button.Size = New-Object System.Drawing.Size(190, 40)
-$tabOffice.Controls.Add($microsoft365Button)
-$microsoft365Button.Add_Click({
-    Start-Process 'https://account.microsoft.com/services/'
-    Show-Status 'Pagina oficiala pentru servicii Microsoft a fost deschisa.'
-})
+# ==================================================
+# 4. Windows / Office
+# ==================================================
 
-# 5. Activare Windows cu licenta proprie
 $tabActivation = New-Object System.Windows.Forms.TabPage
-$tabActivation.Text = 'Windows Activation'
+$tabActivation.Text = 'Windows / Office'
 [void]$tabs.TabPages.Add($tabActivation)
-$activationLabel = New-Object System.Windows.Forms.Label
-$activationLabel.Text = 'Introdu numai o cheie Windows valida pe care o detii:'
-$activationLabel.Location = New-Object System.Drawing.Point(25, 25)
-$activationLabel.AutoSize = $true
-$tabActivation.Controls.Add($activationLabel)
-$keyBox = New-Object System.Windows.Forms.TextBox
-$keyBox.Location = New-Object System.Drawing.Point(25, 65)
-$keyBox.Size = New-Object System.Drawing.Size(270, 25)
-$tabActivation.Controls.Add($keyBox)
-$activateButton = New-Object System.Windows.Forms.Button
-$activateButton.Text = 'Activate With My Key'
-$activateButton.Location = New-Object System.Drawing.Point(25, 105)
-$activateButton.Size = New-Object System.Drawing.Size(180, 38)
-$tabActivation.Controls.Add($activateButton)
-$activateButton.Add_Click({
-    $key = $keyBox.Text.Trim()
-    if ($key -notmatch '^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}$') {
-        [System.Windows.Forms.MessageBox]::Show('Introdu o cheie in format XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.','Windows Toolkit')
-        return
-    }
-    Show-Status 'Se trimite cheia catre Windows...'
-    & cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /ipk $key | Out-Null
-    & cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /ato | Out-Null
-    Show-Status 'Cererea a fost trimisa. Verifica notificarea Windows.'
-})
+
+$activationInfo = New-Object System.Windows.Forms.Label
+$activationInfo.Text = 'Necesita PowerShell pornit ca Administrator. Comenzile ruleaza in consola curenta.'
+$activationInfo.Location = New-Object System.Drawing.Point(25, 25)
+$activationInfo.Size = New-Object System.Drawing.Size(520, 35)
+$tabActivation.Controls.Add($activationInfo)
+
+$hwidButton = New-Object System.Windows.Forms.Button
+$hwidButton.Text = 'HWID - Windows'
+$hwidButton.Location = New-Object System.Drawing.Point(25, 70)
+$hwidButton.Size = New-Object System.Drawing.Size(220, 40)
+$tabActivation.Controls.Add($hwidButton)
+
+$ohookButton = New-Object System.Windows.Forms.Button
+$ohookButton.Text = 'Ohook - Office'
+$ohookButton.Location = New-Object System.Drawing.Point(270, 70)
+$ohookButton.Size = New-Object System.Drawing.Size(220, 40)
+$tabActivation.Controls.Add($ohookButton)
+
+$tsforgeButton = New-Object System.Windows.Forms.Button
+$tsforgeButton.Text = 'TSforge - Windows / Office / ESU'
+$tsforgeButton.Location = New-Object System.Drawing.Point(25, 125)
+$tsforgeButton.Size = New-Object System.Drawing.Size(220, 45)
+$tabActivation.Controls.Add($tsforgeButton)
+
+$kmsButton = New-Object System.Windows.Forms.Button
+$kmsButton.Text = 'Online KMS - Windows / Office'
+$kmsButton.Location = New-Object System.Drawing.Point(270, 125)
+$kmsButton.Size = New-Object System.Drawing.Size(220, 45)
+$tabActivation.Controls.Add($kmsButton)
 
 $script:statusLabel = New-Object System.Windows.Forms.Label
-$script:statusLabel.Text = 'Gata.'
-$script:statusLabel.Location = New-Object System.Drawing.Point(15, 475)
-$script:statusLabel.AutoSize = $true
+$script:statusLabel.Text = 'Ready'
+$script:statusLabel.Location = New-Object System.Drawing.Point(15, 470)
+$script:statusLabel.Size = New-Object System.Drawing.Size(570, 25)
 $form.Controls.Add($script:statusLabel)
 
-[void]$form.ShowDialog()
-try { [Console]::ForegroundColor = [ConsoleColor]::Gray } catch { }
+function Invoke-MasActivation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('HWID', 'Ohook', 'TSforge', 'OnlineKMS')]
+        [string]$Method
+    )
+
+    $isAdmin = [Security.Principal.WindowsPrincipal]::new(
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    if (-not $isAdmin) {
+        Show-Status 'Porneste scriptul din PowerShell cu drepturi de Administrator.'
+        [System.Windows.Forms.MessageBox]::Show(
+            'Pentru a rula in aceeasi consola, inchide aplicatia si porneste PowerShell cu Run as Administrator.',
+            'Windows Toolkit',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        return
+    }
+
+    $activationArguments = @{
+        HWID     = '/HWID'
+        Ohook    = '/Ohook'
+        TSforge  = '/Z-WindowsESUOffice'
+        OnlineKMS = '/K-WindowsOffice'
+    }
+    $urls = @(
+        'https://raw.githubusercontent.com/massgravel/Microsoft-Activation-Scripts/05c4f881efec946c0040cdd552d1afa9a519704b/MAS/All-In-One-Version-KL/MAS_AIO.cmd',
+        'https://dev.azure.com/massgrave/Microsoft-Activation-Scripts/_apis/git/repositories/Microsoft-Activation-Scripts/items?path=/MAS/All-In-One-Version-KL/MAS_AIO.cmd&versionType=Commit&version=05c4f881efec946c0040cdd552d1afa9a519704b',
+        'https://git.activated.win/Microsoft-Activation-Scripts/plain/MAS/All-In-One-Version-KL/MAS_AIO.cmd?id=05c4f881efec946c0040cdd552d1afa9a519704b'
+    )
+    $expectedHash = '850F979665FB93999ACAE93F4790C1FF8ED2041532060B7966A121C2D29A0BFA'
+    $filePath = $null
+    $downloadErrors = @()
+
+    try {
+        Show-Status "Se descarca scriptul pentru $Method..."
+        $response = $null
+
+        foreach ($url in $urls | Sort-Object { Get-Random }) {
+            try {
+                $response = Invoke-RestMethod -Uri $url -ErrorAction Stop
+                if ($response) {
+                    break
+                }
+            }
+            catch {
+                $downloadErrors += $_
+            }
+        }
+
+        if (-not $response) {
+            $errorDetails = ($downloadErrors | ForEach-Object { $_.Exception.Message }) -join [Environment]::NewLine
+            throw "Nu s-a putut descarca scriptul MAS de la niciuna dintre surse. $errorDetails"
+        }
+
+        $stream = New-Object IO.MemoryStream
+        $writer = New-Object IO.StreamWriter $stream
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            $writer.Write($response)
+            $writer.Flush()
+            $stream.Position = 0
+            $hash = [BitConverter]::ToString(
+                $sha256.ComputeHash($stream)
+            ) -replace '-'
+        }
+        finally {
+            $sha256.Dispose()
+            $writer.Dispose()
+            $stream.Dispose()
+        }
+
+        if ($hash -ne $expectedHash) {
+            throw "Verificarea SHA-256 a esuat. Scriptul nu va fi executat. Hash primit: $hash"
+        }
+
+        $fileName = 'MAS_{0}.cmd' -f [Guid]::NewGuid().Guid
+        $filePath = Join-Path -Path "$env:SystemRoot\Temp" -ChildPath $fileName
+        [System.IO.File]::WriteAllText(
+            $filePath,
+            "@::: $([Guid]::NewGuid().Guid)`r`n$response",
+            [System.Text.Encoding]::Default
+        )
+
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            throw 'Fisierul MAS nu a fost creat in folderul temporar.'
+        }
+
+        Show-Status "Ruleaza $Method in consola PowerShell curenta..."
+        $script:statusLabel.Refresh()
+        $form.Hide()
+
+        $commandLine = '"{0}" -el -qedit {1}' -f $filePath, $activationArguments[$Method]
+        & "$env:SystemRoot\System32\cmd.exe" /d /c $commandLine
+        $exitCode = $LASTEXITCODE
+
+        if ($exitCode -ne 0) {
+            throw "MAS s-a incheiat cu codul de iesire $exitCode."
+        }
+
+        Show-Status "Operatiunea $Method s-a incheiat."
+    }
+    catch {
+        Show-Status "Operatiunea $Method a esuat."
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+    finally {
+        if ($filePath -and (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            try {
+                Remove-Item -LiteralPath $filePath -Force -ErrorAction Stop
+            }
+            catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Nu s-a putut sterge fisierul temporar ${filePath}:`r`n$($_.Exception.Message)",
+                    'Windows Toolkit - Eroare',
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                ) | Out-Null
+            }
+        }
+
+        if (-not $form.Visible) {
+            $form.Show()
+            $form.Activate()
+        }
+    }
+}
+
+$hwidButton.Add_Click({ Invoke-MasActivation -Method 'HWID' })
+$ohookButton.Add_Click({ Invoke-MasActivation -Method 'Ohook' })
+$tsforgeButton.Add_Click({ Invoke-MasActivation -Method 'TSforge' })
+$kmsButton.Add_Click({ Invoke-MasActivation -Method 'OnlineKMS' })
+
+$form.ShowDialog() | Out-Null
