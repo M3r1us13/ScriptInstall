@@ -769,7 +769,6 @@ Show-Status 'Dark Mode a fost aplicat.'
 # ==============================
 
 $oldMenuSubKey = 'Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
-$oldMenuPath = "HKCU:\$oldMenuSubKey"
 $oldMenuInprocSubKey = "$oldMenuSubKey\InprocServer32"
 $windowsBuild = 0
 [void][int]::TryParse([string]$os.BuildNumber, [ref]$windowsBuild)
@@ -782,7 +781,7 @@ $tabSystem.Controls.Add($oldMenuLabel)
 
 $oldMenuInfoLabel = New-Object System.Windows.Forms.Label
 $oldMenuInfoLabel.Text = if ($windowsBuild -ge 22000) {
-    'Alege meniul clasic sau cel nou. Explorer se va reporni.'
+    'Explorer se va reporni. Politicile Windows pot bloca modificarea.'
 }
 else {
     'Optiunile sunt doar pentru Windows 11; Windows 10 foloseste deja meniul clasic.'
@@ -844,20 +843,27 @@ function Set-Windows11ContextMenu {
     $registryKey = $null
     try {
         $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $UseClassicMenu)
-        $overrideExists = $null -ne $registryKey
         $currentlyClassic = $false
+        $hasDefaultValue = $false
         if ($null -ne $registryKey) {
-            $defaultValue = $registryKey.GetValue('', $null)
-            $currentlyClassic = ($defaultValue -is [string] -and $defaultValue -eq '')
+            $hasDefaultValue = $registryKey.GetValueNames() -contains ''
+            if ($hasDefaultValue) {
+                $defaultValue = $registryKey.GetValue('', $null)
+                $currentlyClassic = ($defaultValue -is [string] -and $defaultValue -eq '')
+            }
             $registryKey.Close()
             $registryKey = $null
         }
 
-        if (($UseClassicMenu -and $currentlyClassic) -or (-not $UseClassicMenu -and -not $overrideExists)) {
+        if ($currentlyClassic -eq $UseClassicMenu) {
             return $false
         }
 
         if ($UseClassicMenu) {
+            if ($hasDefaultValue) {
+                throw 'Cheia meniului contextual este folosita deja de alta configuratie. Nu am modificat-o.'
+            }
+
             $registryKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($oldMenuInprocSubKey)
             if ($null -eq $registryKey) {
                 throw 'Nu s-a putut crea cheia de registru pentru meniul clasic.'
@@ -866,21 +872,53 @@ function Set-Windows11ContextMenu {
             $registryKey.SetValue('', '', [Microsoft.Win32.RegistryValueKind]::String)
             $registryKey.Flush()
         }
-        elseif (Test-Path -LiteralPath $oldMenuPath) {
-            [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($oldMenuSubKey, $false)
+        else {
+            $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $true)
+            if ($null -eq $registryKey) {
+                throw 'Nu s-a mai gasit cheia meniului contextual pentru restaurare.'
+            }
+            $registryKey.DeleteValue('', $false)
+            $registryKey.Flush()
+            $registryKey.Close()
+            $registryKey = $null
+
+            $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $false)
+            $inprocIsEmpty = $null -ne $registryKey -and
+                $registryKey.GetValueNames().Length -eq 0 -and
+                $registryKey.GetSubKeyNames().Length -eq 0
+            if ($null -ne $registryKey) {
+                $registryKey.Close()
+                $registryKey = $null
+            }
+            if ($inprocIsEmpty) {
+                [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($oldMenuInprocSubKey, $false)
+            }
+
+            $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuSubKey, $false)
+            $rootIsEmpty = $null -ne $registryKey -and
+                $registryKey.GetValueNames().Length -eq 0 -and
+                $registryKey.GetSubKeyNames().Length -eq 0
+            if ($null -ne $registryKey) {
+                $registryKey.Close()
+                $registryKey = $null
+            }
+            if ($rootIsEmpty) {
+                [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($oldMenuSubKey, $false)
+            }
         }
 
         $registryKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($oldMenuInprocSubKey, $false)
-        $overrideExists = $null -ne $registryKey
         $classicMenuIsSet = $false
         if ($null -ne $registryKey) {
-            $defaultValue = $registryKey.GetValue('', $null)
+            if ($registryKey.GetValueNames() -contains '') {
+                $defaultValue = $registryKey.GetValue('', $null)
+                $classicMenuIsSet = ($defaultValue -is [string] -and $defaultValue -eq '')
+            }
             $registryKey.Close()
             $registryKey = $null
-            $classicMenuIsSet = ($defaultValue -is [string] -and $defaultValue -eq '')
         }
 
-        if (($UseClassicMenu -and -not $classicMenuIsSet) -or (-not $UseClassicMenu -and $overrideExists)) {
+        if ($classicMenuIsSet -ne $UseClassicMenu) {
             throw 'Verificarea setarii din registru nu a reusit.'
         }
 
@@ -891,7 +929,6 @@ function Set-Windows11ContextMenu {
             $registryKey.Close()
         }
     }
-
 }
 
 $oldMenuButton = New-Object System.Windows.Forms.Button
