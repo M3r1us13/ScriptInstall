@@ -69,28 +69,109 @@ function Write-At {
 
 $computerName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'Computer' }
 $userName = if ($env:USERNAME) { $env:USERNAME } else { 'User' }
-$os = Get-CimInstance Win32_OperatingSystem
-$computer = Get-CimInstance Win32_ComputerSystem
-$processor = Get-CimInstance Win32_Processor | Select-Object -First 1
-$osName = if ($os.Caption) { $os.Caption } else { 'Windows' }
-$osVersion = if ($os.Version) { $os.Version } else { 'Unknown' }
-$cpuName = if ($processor.Name) { $processor.Name.Trim() } else { 'Unknown' }
-$memoryGB = if ($computer.TotalPhysicalMemory) { [math]::Round($computer.TotalPhysicalMemory / 1GB, 1) } else { 'Unknown' }
+$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+$computer = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+$processor = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+$board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
+$bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -First 1
+$videoAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+$systemDrive = if ($os -and $os.SystemDrive) { $os.SystemDrive } else { $env:SystemDrive }
+$systemDisk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$systemDrive'" -ErrorAction SilentlyContinue
+$osDetails = Get-ItemProperty `
+    -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' `
+    -ErrorAction SilentlyContinue
 
-$info = @(
-    "$userName@$computerName"
-    '------------------------'
-    "OS: $osName"
-    "Version: $osVersion"
-    "Host: $computerName"
-    'Kernel: Windows'
-    'Shell: PowerShell'
-    "CPU: $cpuName"
-    "Memory: $memoryGB GB"
-    ''
-    'Theme: Dark Terminal'
-    'Animation: Enabled'
+$osName = if ($os -and $os.Caption) { $os.Caption.Trim() } else { 'Unavailable' }
+$osVersion = if ($os -and $os.Version) { $os.Version } else { 'Unavailable' }
+$osBuild = if ($os -and $os.BuildNumber) { $os.BuildNumber } else { 'Unavailable' }
+$osRelease = if ($osDetails -and $osDetails.DisplayVersion) { $osDetails.DisplayVersion } elseif ($osDetails -and $osDetails.ReleaseId) { $osDetails.ReleaseId } else { 'Unavailable' }
+$architecture = if ($os -and $os.OSArchitecture) { $os.OSArchitecture } else { 'Unavailable' }
+$systemModel = if ($computer -and $computer.Model) { $computer.Model.Trim() } else { 'Unavailable' }
+$systemManufacturer = if ($computer -and $computer.Manufacturer) { $computer.Manufacturer.Trim() } else { 'Unavailable' }
+$cpuName = if ($processor -and $processor.Name) { $processor.Name.Trim() } else { 'Unavailable' }
+$cpuCores = if ($processor -and $processor.NumberOfCores) { $processor.NumberOfCores } else { 'Unavailable' }
+$cpuThreads = if ($processor -and $processor.NumberOfLogicalProcessors) { $processor.NumberOfLogicalProcessors } else { 'Unavailable' }
+$cpuSpeed = if ($processor -and $processor.MaxClockSpeed) { '{0:N2} GHz' -f ($processor.MaxClockSpeed / 1000) } else { 'Unavailable' }
+$memoryTotal = if ($computer -and $computer.TotalPhysicalMemory) { [math]::Round($computer.TotalPhysicalMemory / 1GB, 1) } else { $null }
+$memoryFree = if ($os -and $os.FreePhysicalMemory) { [math]::Round($os.FreePhysicalMemory / 1MB, 1) } else { $null }
+$memoryInUse = if ($null -ne $memoryTotal -and $null -ne $memoryFree) { [math]::Round($memoryTotal - $memoryFree, 1) } else { $null }
+$memoryDetails = if ($null -ne $memoryTotal -and $null -ne $memoryFree) {
+    "$memoryInUse GB used / $memoryFree GB free / $memoryTotal GB total"
+}
+elseif ($null -ne $memoryTotal) {
+    "$memoryTotal GB total"
+}
+else {
+    'Unavailable'
+}
+$gpuNames = @($videoAdapters | Where-Object { $_.Name } | ForEach-Object { $_.Name.Trim() } | Select-Object -Unique)
+$gpuDetails = if ($gpuNames.Count -gt 0) { $gpuNames -join ', ' } else { 'Unavailable' }
+$boardDetails = if ($board -and ($board.Manufacturer -or $board.Product)) {
+    (@($board.Manufacturer, $board.Product) | Where-Object { $_ }) -join ' '
+}
+else {
+    'Unavailable'
+}
+$biosDetails = if ($bios) {
+    $biosValues = @($bios.Manufacturer, $bios.SMBIOSBIOSVersion) | Where-Object { $_ }
+    if ($bios.ReleaseDate) {
+        $biosValues += ([datetime]$bios.ReleaseDate).ToString('yyyy-MM-dd')
+    }
+    if ($biosValues.Count -gt 0) { $biosValues -join ' / ' } else { 'Unavailable' }
+}
+else {
+    'Unavailable'
+}
+$storageDetails = if ($systemDisk -and $systemDisk.Size -gt 0) {
+    '{0}: {1:N1} GB free / {2:N1} GB total' -f $systemDrive, ($systemDisk.FreeSpace / 1GB), ($systemDisk.Size / 1GB)
+}
+else {
+    'Unavailable'
+}
+$uptimeDetails = if ($os -and $os.LastBootUpTime) {
+    $uptime = (Get-Date) - $os.LastBootUpTime
+    '{0}d {1}h {2}m' -f [math]::Floor($uptime.TotalDays), $uptime.Hours, $uptime.Minutes
+}
+else {
+    'Unavailable'
+}
+$powerDetails = if ($computer -and $computer.PCSystemType -in @(2, 8)) { 'Laptop' } else { 'Desktop / other' }
+
+$infoEntries = @(
+    @{ Label = "$userName@$computerName"; Value = '' }
+    @{ Label = '------------------------'; Value = '' }
+    @{ Label = 'OS'; Value = $osName }
+    @{ Label = 'Release / build'; Value = "$osRelease / $osBuild ($osVersion)" }
+    @{ Label = 'Architecture'; Value = $architecture }
+    @{ Label = 'Device'; Value = "$systemManufacturer $systemModel" }
+    @{ Label = 'Device type'; Value = $powerDetails }
+    @{ Label = 'CPU'; Value = "$cpuName ($cpuCores cores / $cpuThreads threads, up to $cpuSpeed)" }
+    @{ Label = 'Memory'; Value = $memoryDetails }
+    @{ Label = 'GPU'; Value = $gpuDetails }
+    @{ Label = 'Motherboard'; Value = $boardDetails }
+    @{ Label = 'BIOS'; Value = $biosDetails }
+    @{ Label = 'System drive'; Value = $storageDetails }
+    @{ Label = 'Uptime'; Value = $uptimeDetails }
+    @{ Label = 'Shell'; Value = "PowerShell $($PSVersionTable.PSVersion)" }
+    @{ Label = 'Theme'; Value = 'Dark Terminal' }
 )
+
+$leftX = 2
+$topY = 2
+$rightX = 42
+$consoleSize = Get-SafeConsoleSize
+$maxInfoWidth = [math]::Max(24, [int]$consoleSize[0] - $rightX - 2)
+$info = New-Object System.Collections.Generic.List[string]
+foreach ($entry in $infoEntries) {
+    $text = if ($entry.Value) { '{0}: {1}' -f $entry.Label, $entry.Value } else { $entry.Label }
+    while ($text.Length -gt $maxInfoWidth) {
+        $breakAt = $text.LastIndexOf(' ', $maxInfoWidth)
+        if ($breakAt -lt 1) { $breakAt = $maxInfoWidth }
+        $info.Add($text.Substring(0, $breakAt))
+        $text = '  ' + $text.Substring($breakAt).TrimStart()
+    }
+    $info.Add($text)
+}
 
 Clear-Host
 try {
@@ -99,10 +180,6 @@ try {
     [Console]::CursorVisible = $false
 }
 catch { }
-
-$leftX = 2
-$topY = 2
-$rightX = 42
 
 for ($index = 0; $index -lt $info.Count; $index++) {
     $color = if ($index -lt 2) { $accentColor } else { $textColor }
@@ -117,7 +194,7 @@ for ($lineIndex = 0; $lineIndex -lt $logo.Count; $lineIndex++) {
     }
 }
 
-$barY = $topY + $info.Count + 1
+$barY = $topY + [math]::Max($logo.Count, $info.Count) + 1
 $barX = $rightX
 $barColors = @(
     [ConsoleColor]::DarkRed, [ConsoleColor]::Red,
@@ -131,8 +208,8 @@ for ($index = 0; $index -lt $barColors.Count; $index++) {
     Write-At -X ($barX + ($index * 4)) -Y $barY -Text '    ' -Color $barColors[$index]
 }
 
-$promptY = $barY + 3
-$prompt = "$userName@$computerName ~\projects\neofetch > "
+$promptY = $barY + 2
+$prompt = "$userName@$computerName ~\projects\scriptinstall > "
 Write-At -X $leftX -Y $promptY -Text $prompt -Color $labelColor
 $command = ' powershell.exe -NoProfile'
 $commandX = $leftX + $prompt.Length
