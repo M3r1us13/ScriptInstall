@@ -1880,18 +1880,17 @@ $appServiceNote.Size = New-Object System.Drawing.Size(535, 45)
 $tabAppService.Controls.Add($appServiceNote)
 
 $serviceAppList = @(
-    [PSCustomObject]@{ Name = 'Hard Disk Sentinel Standard'; Id = 'JanosMathe.HardDiskSentinel.Standard'; Architecture = ''; Description = 'Monitorizeaza sanatatea si performanta HDD-urilor si SSD-urilor folosind date SMART si teste de diagnostic. Versiunea Standard este shareware.' },
-    [PSCustomObject]@{ Name = 'CrystalDiskInfo'; Id = 'CrystalDewWorld.CrystalDiskInfo'; Architecture = ''; Description = 'Afiseaza starea de sanatate, temperatura si informatiile SMART ale HDD-urilor si SSD-urilor.' },
-    [PSCustomObject]@{ Name = 'HWiNFO'; Id = 'REALiX.HWiNFO'; Architecture = ''; Description = 'Afiseaza informatii detaliate despre componente si senzori, inclusiv temperaturi, tensiuni si turatii.' },
-    [PSCustomObject]@{ Name = 'CPU-Z'; Id = 'CPUID.CPU-Z'; Architecture = ''; Description = 'Identifica procesorul, placa de baza si memoria RAM; poate afisa frecvente si temporizari.' },
-    [PSCustomObject]@{ Name = 'GPU-Z'; Id = 'TechPowerUp.GPU-Z'; Architecture = ''; Description = 'Afiseaza modelul placii video, memoria, frecventele si datele senzorilor GPU.' },
-    [PSCustomObject]@{ Name = 'CrystalDiskMark'; Id = 'CrystalDewWorld.CrystalDiskMark'; Architecture = ''; Description = 'Masuratori de viteza pentru HDD-uri si SSD-uri. Testele pot solicita discul; evita-le pe dispozitive cu probleme sau date nesalvate.' },
-    [PSCustomObject]@{ Name = 'Rufus'; Id = 'Rufus.Rufus'; Architecture = ''; Description = 'Creeaza stick-uri USB bootabile pentru instalarea sau recuperarea sistemelor. Scrierea imaginii sterge continutul stick-ului selectat.' },
-    [PSCustomObject]@{ Name = 'Everything'; Id = 'voidtools.Everything'; Architecture = ''; Description = 'Cauta rapid fisiere si foldere dupa nume pe volumele NTFS indexate.' },
-    [PSCustomObject]@{ Name = 'TreeSize Free'; Id = 'JAMSoftware.TreeSize.Free'; Architecture = ''; Description = 'Analizeaza utilizarea spatiului pe disc si arata folderele si fisierele care ocupa cel mai mult.' },
-    [PSCustomObject]@{ Name = 'Revo Uninstaller'; Id = 'RevoUninstaller.RevoUninstaller'; Architecture = ''; Description = 'Dezinstaleaza aplicatii si poate cauta fisiere si intrari de registru ramase dupa dezinstalare.' }
+    [PSCustomObject]@{ Name = 'Hard Disk Sentinel Standard'; Id = 'JanosMathe.HardDiskSentinel.Standard'; Architecture = ''; CleanupPaths = @('Hard Disk Sentinel', 'HDSentinel'); Description = 'Monitorizeaza sanatatea si performanta HDD-urilor si SSD-urilor folosind date SMART si teste de diagnostic. Versiunea Standard este shareware.' },
+    [PSCustomObject]@{ Name = 'CrystalDiskInfo'; Id = 'CrystalDewWorld.CrystalDiskInfo'; Architecture = ''; CleanupPaths = @('CrystalDiskInfo', 'Crystal Dew World\CrystalDiskInfo'); Description = 'Afiseaza starea de sanatate, temperatura si informatiile SMART ale HDD-urilor si SSD-urilor.' },
+    [PSCustomObject]@{ Name = 'HWiNFO'; Id = 'REALiX.HWiNFO'; Architecture = ''; CleanupPaths = @('HWiNFO64', 'HWiNFO'); Description = 'Afiseaza informatii detaliate despre componente si senzori, inclusiv temperaturi, tensiuni si turatii.' },
+    [PSCustomObject]@{ Name = 'CPU-Z'; Id = 'CPUID.CPU-Z'; Architecture = ''; CleanupPaths = @('CPU-Z', 'CPUID\CPU-Z'); Description = 'Identifica procesorul, placa de baza si memoria RAM; poate afisa frecvente si temporizari.' },
+    [PSCustomObject]@{ Name = 'GPU-Z'; Id = 'TechPowerUp.GPU-Z'; Architecture = ''; CleanupPaths = @('GPU-Z', 'TechPowerUp\GPU-Z'); Description = 'Afiseaza modelul placii video, memoria, frecventele si datele senzorilor GPU.' },
+    [PSCustomObject]@{ Name = 'CrystalDiskMark'; Id = 'CrystalDewWorld.CrystalDiskMark'; Architecture = ''; CleanupPaths = @('CrystalDiskMark', 'Crystal Dew World\CrystalDiskMark'); Description = 'Masuratori de viteza pentru HDD-uri si SSD-uri. Testele pot solicita discul; evita-le pe dispozitive cu probleme sau date nesalvate.' },
+    [PSCustomObject]@{ Name = 'Rufus'; Id = 'Rufus.Rufus'; Architecture = ''; CleanupPaths = @('Rufus'); Description = 'Creeaza stick-uri USB bootabile pentru instalarea sau recuperarea sistemelor. Scrierea imaginii sterge continutul stick-ului selectat.' },
+    [PSCustomObject]@{ Name = 'Everything'; Id = 'voidtools.Everything'; Architecture = ''; CleanupPaths = @('Everything', 'voidtools\Everything'); Description = 'Cauta rapid fisiere si foldere dupa nume pe volumele NTFS indexate.' },
+    [PSCustomObject]@{ Name = 'TreeSize Free'; Id = 'JAMSoftware.TreeSize.Free'; Architecture = ''; CleanupPaths = @('TreeSize Free', 'JAM Software\TreeSize Free'); Description = 'Analizeaza utilizarea spatiului pe disc si arata folderele si fisierele care ocupa cel mai mult.' },
+    [PSCustomObject]@{ Name = 'Revo Uninstaller'; Id = 'RevoUninstaller.RevoUninstaller'; Architecture = ''; CleanupPaths = @('Revo Uninstaller', 'VS Revo Group\Revo Uninstaller'); Description = 'Dezinstaleaza aplicatii si poate cauta fisiere si intrari de registru ramase dupa dezinstalare.' }
 )
-$serviceAppChecks = @()
 $serviceAppChecks = @()
 $serviceAppLeftColumnCount = [int][Math]::Ceiling($serviceAppList.Count / 2)
 for ($i = 0; $i -lt $serviceAppList.Count; $i++) {
@@ -1921,6 +1920,57 @@ for ($i = 0; $i -lt $serviceAppList.Count; $i++) {
         $descriptionLabel.Text = 'Treci cu mouse-ul peste o aplicatie pentru a vedea ce face.'
     }.GetNewClosure())
     $serviceAppChecks += $check
+}
+
+function Get-ServiceAppCleanupCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$App
+    )
+
+    $roots = @(
+        $env:ProgramFiles
+        ${env:ProgramFiles(x86)}
+        $env:ProgramData
+        $env:LOCALAPPDATA
+        $env:APPDATA
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+    $candidates = @()
+    foreach ($root in $roots) {
+        $rootPath = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+        foreach ($relativePath in $App.CleanupPaths) {
+            if ([System.IO.Path]::IsPathRooted($relativePath)) {
+                continue
+            }
+
+            $candidatePath = [System.IO.Path]::GetFullPath(
+                (Join-Path -Path $rootPath -ChildPath $relativePath)
+            )
+            if (-not $candidatePath.StartsWith(
+                ($rootPath + '\'),
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+                continue
+            }
+
+            if (-not (Test-Path -LiteralPath $candidatePath -PathType Container)) {
+                continue
+            }
+
+            $directory = Get-Item -LiteralPath $candidatePath -Force -ErrorAction Stop
+            if (($directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                continue
+            }
+
+            $candidates += [PSCustomObject]@{
+                AppName = $App.Name
+                Path = $candidatePath
+            }
+        }
+    }
+
+    return @($candidates | Sort-Object Path -Unique)
 }
 
 function Invoke-AppServiceWinget {
@@ -2140,16 +2190,89 @@ $appServiceUninstallButton.Add_Click({
     }
 
     $failed = @()
+    $notTrackedByWinget = @()
+    $successfullyUninstalled = @()
     foreach ($app in $selectedApps) {
         try {
             Invoke-AppServiceWinget `
                 -Arguments @('uninstall', '--id', $app.Id, '--exact', '--silent', '--accept-source-agreements', '--disable-interactivity') `
                 -Operation "Se dezinstaleaza $($app.Name)" | Out-Null
+            $successfullyUninstalled += $app
         }
         catch {
-            $failed += "$($app.Name): $($_.Exception.Message)"
+            if ($_.Exception.Message -match '-1978335212|0x8A150014') {
+                $notTrackedByWinget += $app.Name
+            }
+            else {
+                $failed += "$($app.Name): $($_.Exception.Message)"
+            }
         }
     }
+
+    $cleanupCandidates = @()
+    $cleanupSkipped = $false
+    foreach ($app in $successfullyUninstalled) {
+        try {
+            $cleanupCandidates += @(Get-ServiceAppCleanupCandidates -App $app)
+        }
+        catch {
+            $failed += "Nu s-au putut verifica folderele ramase pentru $($app.Name): $($_.Exception.Message)"
+        }
+    }
+
+    if ($cleanupCandidates.Count -gt 0) {
+        $cleanupPaths = @(
+            $cleanupCandidates |
+                Sort-Object Path -Unique |
+                ForEach-Object { $_.Path }
+        )
+        $cleanupConfirmation = [System.Windows.Forms.MessageBox]::Show(
+            "Dezinstalarea s-a incheiat. Au fost gasite foldere dedicate aplicatiilor selectate, care pot contine setari si date salvate:`r`n`r`n$($cleanupPaths -join [Environment]::NewLine)`r`n`r`nVrei sa stergi definitiv aceste foldere si continutul lor? Folderele comune sau cele care nu au fost gasite nu vor fi sterse.",
+            'Confirma stergerea datelor ramase',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+        )
+
+        if ($cleanupConfirmation -eq [System.Windows.Forms.DialogResult]::Yes) {
+            foreach ($cleanupPath in $cleanupPaths) {
+                try {
+                    Remove-Item `
+                        -LiteralPath $cleanupPath `
+                        -Recurse `
+                        -Force `
+                        -ErrorAction Stop
+                }
+                catch {
+                    $failed += "Nu s-a putut sterge $cleanupPath : $($_.Exception.Message)"
+                }
+            }
+        }
+        else {
+            $cleanupSkipped = $true
+        }
+    }
+
+    if ($notTrackedByWinget.Count -gt 0) {
+        $appsNotFound = $notTrackedByWinget -join ', '
+        $openSettings = [System.Windows.Forms.MessageBox]::Show(
+            "Winget nu gaseste ca fiind instalate: $appsNotFound.`r`n`r`nAplicatia poate fi instalata manual sau poate sa nu mai fie instalata. Vrei sa deschid Setari > Aplicatii instalate pentru dezinstalare manuala?",
+            'Aplicatie negasita in winget',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Information,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button1
+        )
+
+        if ($openSettings -eq [System.Windows.Forms.DialogResult]::Yes) {
+            try {
+                Start-Process -FilePath 'ms-settings:appsfeatures' -ErrorAction Stop
+            }
+            catch {
+                $failed += "Nu s-au putut deschide Setarile Windows: $($_.Exception.Message)"
+            }
+        }
+    }
+
     if ($failed.Count -gt 0) {
         Show-Status "Unele dezinstalari nu au reusit: $($failed.Count)."
         [System.Windows.Forms.MessageBox]::Show(
@@ -2158,6 +2281,15 @@ $appServiceUninstallButton.Add_Click({
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         ) | Out-Null
+    }
+    elseif ($notTrackedByWinget.Count -gt 0) {
+        Show-Status 'Winget nu a gasit aplicatiile selectate; deschide Setari > Aplicatii instalate pentru verificare.'
+    }
+    elseif ($successfullyUninstalled.Count -gt 0 -and $cleanupCandidates.Count -eq 0) {
+        Show-Status 'Dezinstalarea s-a incheiat. Nu au fost gasite foldere dedicate ramase pentru curatare.'
+    }
+    elseif ($cleanupSkipped) {
+        Show-Status 'Dezinstalarea s-a incheiat; folderele ramase au fost pastrate.'
     }
     else {
         Show-Status 'Dezinstalarea aplicatiilor selectate s-a incheiat.'
