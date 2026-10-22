@@ -228,18 +228,6 @@ try { [Console]::CursorVisible = $true } catch { }
 # ==============================
 # Windows Toolkit GUI
 # ==============================
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
-
-function Show-Status {
-    param([string]$Message)
-    if ($script:statusLabel) { $script:statusLabel.Text = $Message }
-}
-
-# ==============================
-# Windows Toolkit GUI
-# ==============================
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -336,15 +324,7 @@ Show-Status -Message 'Descarcarea s-a terminat.'
     }
     catch {
         Show-Status -Message 'Descarcarea a esuat.'
-
-[System.Windows.Forms.MessageBox]::Show(
-            "Eroare la descarcare:`r`n$($_.Exception.Message)",
-            'Windows Toolkit - Eroare',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        ) | Out-Null
-
-return $false
+        throw "Eroare la descarcare: $($_.Exception.Message)"
     }
 }
 
@@ -418,7 +398,7 @@ Copy-Item `
 return $true
     }
     catch {
-        return $false
+        throw "Nu s-a putut crea shortcut-ul pentru ${AppName}: $($_.Exception.Message)"
     }
 }
 
@@ -466,13 +446,9 @@ function Ensure-WingetAvailable {
             Start-Sleep -Seconds 1
         }
 
-        $downloaded = Invoke-RemoteFileDownload `
+        Invoke-RemoteFileDownload `
             -Url 'https://aka.ms/getwinget' `
-            -Destination $installerPath
-
-        if (-not $downloaded) {
-            throw 'Pachetul Microsoft App Installer nu a putut fi descarcat.'
-        }
+            -Destination $installerPath | Out-Null
 
         Show-Status -Message 'Se instaleaza Microsoft App Installer...'
         Add-AppxPackage `
@@ -595,14 +571,28 @@ function Install-WingetPackage {
 
         Start-Sleep -Seconds 3
 
-        $shortcutCreated = New-DesktopShortcutFromStartMenu `
-            -AppName $Name
+        $shortcutCreated = $false
+        $shortcutCreationFailed = $false
+        try {
+            $shortcutCreated = New-DesktopShortcutFromStartMenu `
+                -AppName $Name
+        }
+        catch {
+            $shortcutCreationFailed = $true
+            Show-Status "$Name a fost instalat, dar shortcut-ul nu a putut fi creat."
+            [System.Windows.Forms.MessageBox]::Show(
+                $_.Exception.Message,
+                'Shortcut - Windows Toolkit',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            ) | Out-Null
+        }
 
         if ($shortcutCreated) {
             Show-Status `
                 -Message "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
         }
-        else {
+        elseif (-not $shortcutCreationFailed) {
             Show-Status `
                 -Message "$Name a fost instalat, dar shortcut-ul nu a fost gasit."
         }
@@ -625,64 +615,6 @@ function Install-WingetPackage {
 }
 
 
-function New-DesktopShortcutFromStartMenu {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$AppName
-    )
-
-try {
-        $desktopPath = [Environment]::GetFolderPath('Desktop')
-
-$startMenuPaths = @(
-            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
-            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-        )
-
-$shortcut = $null
-
-foreach ($startMenuPath in $startMenuPaths) {
-            if (-not (Test-Path $startMenuPath)) {
-                continue
-            }
-
-$shortcut = Get-ChildItem `
-                -Path $startMenuPath `
-                -Filter '*.lnk' `
-                -File `
-                -Recurse `
-                -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.BaseName -like "*$AppName*"
-                } |
-                Select-Object -First 1
-
-if ($shortcut) {
-                break
-            }
-        }
-
-if (-not $shortcut) {
-            return $false
-        }
-
-$desktopShortcut = Join-Path `
-            $desktopPath `
-            ($shortcut.Name)
-
-Copy-Item `
-            -Path $shortcut.FullName `
-            -Destination $desktopShortcut `
-            -Force `
-            -ErrorAction Stop
-
-return $true
-    }
-    catch {
-        return $false
-    }
-}
-
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Windows Toolkit'
 $form.Size = New-Object System.Drawing.Size(620, 545)
@@ -701,23 +633,29 @@ $tabApps.Text = 'Install Apps'
 [void]$tabs.TabPages.Add($tabApps)
 
 $appList = @(
-    [PSCustomObject]@{ Name = 'Google Chrome'; Id = 'Google.Chrome'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Brave'; Id = 'Brave.Brave'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Adobe Acrobat Reader'; Id = 'Adobe.Acrobat.Reader.64-bit'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'TeamViewer'; Id = 'TeamViewer.TeamViewer'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'UltraViewer'; Id = 'DucFabulous.UltraViewer'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'AnyDesk'; Id = 'AnyDeskSoftwareGmbH.AnyDesk'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'WinRAR'; Id = 'RARLab.WinRAR'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'VLC Media Player'; Id = 'VideoLAN.VLC'; Architecture = '' },
-    [PSCustomObject]@{ Name = '7-Zip'; Id = '7zip.7zip'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Spotify'; Id = 'Spotify.Spotify'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Java 8 x64 (Temurin / AdoptOpenJDK)'; Id = 'EclipseAdoptium.Temurin.8.JRE'; Architecture = 'x64' },
-    [PSCustomObject]@{ Name = 'Google Earth Pro'; Id = 'Google.EarthPro'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Winamp'; Id = 'Winamp.Winamp'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Malwarebytes'; Id = 'Malwarebytes.Malwarebytes'; Architecture = '' },
-    [PSCustomObject]@{ Name = 'Steam'; Id = 'Valve.Steam'; Architecture = '' }
+    [PSCustomObject]@{ Name = 'Google Chrome'; Id = 'Google.Chrome'; Architecture = ''; Description = 'Browser web pentru site-uri, conturi si aplicatii online.' },
+    [PSCustomObject]@{ Name = 'Brave'; Id = 'Brave.Brave'; Architecture = ''; Description = 'Browser web axat pe confidentialitate, cu blocarea integrata a reclamelor si trackerelor.' },
+    [PSCustomObject]@{ Name = 'Adobe Acrobat Reader'; Id = 'Adobe.Acrobat.Reader.64-bit'; Architecture = ''; Description = 'Deschide, citeste, semneaza si adnoteaza documente PDF.' },
+    [PSCustomObject]@{ Name = 'TeamViewer'; Id = 'TeamViewer.TeamViewer'; Architecture = ''; Description = 'Acces si asistenta la distanta pentru conectarea la alte calculatoare. Foloseste-l doar cu persoane de incredere.' },
+    [PSCustomObject]@{ Name = 'UltraViewer'; Id = 'DucFabulous.UltraViewer'; Architecture = ''; Description = 'Aplicatie de control si asistenta la distanta pentru calculatoare Windows.' },
+    [PSCustomObject]@{ Name = 'AnyDesk'; Id = 'AnyDeskSoftwareGmbH.AnyDesk'; Architecture = ''; Description = 'Acces la distanta si suport tehnic pentru alte dispozitive. Acorda acces numai persoanelor de incredere.' },
+    [PSCustomObject]@{ Name = 'WinRAR'; Id = 'RARLab.WinRAR'; Architecture = ''; Description = 'Deschide si creeaza arhive, inclusiv RAR si ZIP.' },
+    [PSCustomObject]@{ Name = 'VLC Media Player'; Id = 'VideoLAN.VLC'; Architecture = ''; Description = 'Reda majoritatea formatelor video si audio fara pachete suplimentare de codec-uri.' },
+    [PSCustomObject]@{ Name = '7-Zip'; Id = '7zip.7zip'; Architecture = ''; Description = 'Arhiveaza si extrage fisiere, inclusiv formate 7z si ZIP.' },
+    [PSCustomObject]@{ Name = 'Spotify'; Id = 'Spotify.Spotify'; Architecture = ''; Description = 'Reda muzica, podcasturi si alte continuturi audio online.' },
+    [PSCustomObject]@{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++'; Architecture = ''; Description = 'Editor de text si cod sursa cu evidentierea sintaxei si functii pentru programare.' },
+    [PSCustomObject]@{ Name = 'Java 8 x64 (Temurin / AdoptOpenJDK)'; Id = 'EclipseAdoptium.Temurin.8.JRE'; Architecture = 'x64'; Description = 'Mediu Java 8 pe 64 de biti, necesar aplicatiilor care ruleaza pe Java. Include JRE, nu unelte de dezvoltare JDK.' },
+    [PSCustomObject]@{ Name = 'Google Earth Pro'; Id = 'Google.EarthPro'; Architecture = ''; Description = 'Exploreaza globul cu imagini satelitare, harti si instrumente geografice.' },
+    [PSCustomObject]@{ Name = 'Winamp'; Id = 'Winamp.Winamp'; Architecture = ''; Description = 'Player audio pentru colectii muzicale si redare de fisiere locale.' },
+    [PSCustomObject]@{ Name = 'Malwarebytes'; Id = 'Malwarebytes.Malwarebytes'; Architecture = ''; Description = 'Scaneaza si ajuta la eliminarea malware-ului si a altor programe nedorite.' },
+    [PSCustomObject]@{ Name = 'Steam'; Id = 'Valve.Steam'; Architecture = ''; Description = 'Platforma pentru cumpararea, descarcarea si lansarea jocurilor pentru PC.' }
 )
+
+$appToolTip = New-Object System.Windows.Forms.ToolTip
+$appToolTip.AutoPopDelay = 15000
+$appToolTip.InitialDelay = 400
+$appToolTip.ReshowDelay = 100
+$appToolTip.ShowAlways = $true
 
 $appChecks = @()
 $leftColumnCount = [int][Math]::Ceiling($appList.Count / 2)
@@ -744,6 +682,7 @@ for ($i = 0; $i -lt $appList.Count; $i++) {
     $check.UseVisualStyleBackColor = $true
 
     $tabApps.Controls.Add($check)
+    $appToolTip.SetToolTip($check, $app.Description)
     $appChecks += $check
 
 }
@@ -804,6 +743,15 @@ try {
             Show-Status 'Instalarea aplicatiilor s-a terminat.'
         }
     }
+    catch {
+        Show-Status 'Instalarea aplicatiilor s-a oprit din cauza unei erori neasteptate.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
     finally {
         $installButton.Enabled = $true
     }
@@ -842,22 +790,69 @@ $cleanButton.Add_Click({
 try {
         Show-Status 'Se curata fisierele temporare...'
 
-$userTempPath = Join-Path $env:TEMP '*'
-        $windowsTempPath = Join-Path $env:WINDIR 'Temp\*'
+$cleanupErrors = New-Object 'System.Collections.Generic.List[string]'
+$processedPaths = @()
+$tempDirectories = @(
+    $env:TEMP
+    (Join-Path $env:WINDIR 'Temp')
+)
 
-Remove-Item `
-            -Path $userTempPath `
-            -Recurse `
+foreach ($tempDirectory in $tempDirectories) {
+    if ([string]::IsNullOrWhiteSpace($tempDirectory)) {
+        continue
+    }
+
+    try {
+        $resolvedDirectory = [System.IO.Path]::GetFullPath($tempDirectory)
+        if ($processedPaths -contains $resolvedDirectory) {
+            continue
+        }
+        $processedPaths += $resolvedDirectory
+
+        $rootPath = [System.IO.Path]::GetPathRoot($resolvedDirectory)
+        if ($resolvedDirectory.TrimEnd('\') -eq $rootPath.TrimEnd('\')) {
+            throw "Calea temporara nu este sigura pentru curatare: $resolvedDirectory"
+        }
+
+        if (-not (Test-Path -LiteralPath $resolvedDirectory -PathType Container)) {
+            continue
+        }
+
+        $tempItems = Get-ChildItem `
+            -LiteralPath $resolvedDirectory `
             -Force `
-            -ErrorAction SilentlyContinue
+            -ErrorAction Stop
 
-Remove-Item `
-            -Path $windowsTempPath `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue
+        foreach ($tempItem in $tempItems) {
+            try {
+                Remove-Item `
+                    -LiteralPath $tempItem.FullName `
+                    -Recurse `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            catch {
+                $cleanupErrors.Add("$($tempItem.FullName): $($_.Exception.Message)")
+            }
+        }
+    }
+    catch {
+        $cleanupErrors.Add("$tempDirectory`: $($_.Exception.Message)")
+    }
+}
 
-Show-Status 'Fisierele temporare au fost curatate.'
+if ($cleanupErrors.Count -gt 0) {
+    Show-Status "Curatare partiala. Elemente cu erori: $($cleanupErrors.Count)."
+    [System.Windows.Forms.MessageBox]::Show(
+        ($cleanupErrors -join [Environment]::NewLine),
+        'Curatare partiala - Windows Toolkit',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    ) | Out-Null
+}
+else {
+    Show-Status 'Fisierele temporare au fost curatate.'
+}
     }
     catch {
         Show-Status 'Curatarea fisierelor temporare a esuat.'
@@ -902,28 +897,33 @@ New-Item `
             -Force `
             -ErrorAction Stop | Out-Null
 
-Set-ItemProperty `
+New-ItemProperty `
             -Path $darkPath `
             -Name 'AppsUseLightTheme' `
+            -PropertyType DWord `
             -Value 0 `
-            -Type DWord `
-            -ErrorAction Stop
+            -Force `
+            -ErrorAction Stop | Out-Null
 
-Set-ItemProperty `
+New-ItemProperty `
             -Path $darkPath `
             -Name 'SystemUsesLightTheme' `
+            -PropertyType DWord `
             -Value 0 `
-            -Type DWord `
-            -ErrorAction Stop
+            -Force `
+            -ErrorAction Stop | Out-Null
 
-# Reimprospatare non-destructiva a parametrilor Windows.
-        # Nu inchide Explorer si nu afecteaza wallpaper-ul.
-        Start-Process `
+        $refreshProcess = Start-Process `
             -FilePath "$env:WINDIR\System32\rundll32.exe" `
             -ArgumentList 'user32.dll,UpdatePerUserSystemParameters' `
             -WindowStyle Hidden `
             -Wait `
-            -ErrorAction SilentlyContinue
+            -PassThru `
+            -ErrorAction Stop
+
+        if ($refreshProcess.ExitCode -ne 0) {
+            throw "Reimprospatarea temei a esuat (cod $($refreshProcess.ExitCode))."
+        }
 
 Show-Status 'Dark Mode a fost aplicat.'
     }
@@ -1225,7 +1225,12 @@ $tabPerformance.Controls.Add($performanceInfoLabel)
 $powerBackupPath = 'HKCU:\Software\WindowsToolkit\PowerBackup'
 
 function Test-HasBattery {
-    return ($null -ne (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue))
+    $batteries = @(
+        Get-CimInstance `
+            -ClassName Win32_Battery `
+            -ErrorAction Stop
+    )
+    return ($batteries.Count -gt 0)
 }
 
 function Get-ActiveSchemeGuid {
@@ -1263,39 +1268,94 @@ function Get-PowerTimeouts {
 $result = @{}
 
 foreach ($key in $map.Keys) {
-        $out = (powercfg /q SCHEME_CURRENT $map[$key][0] $map[$key][1] 2>$null) -join ' '
-        $ac = '0x00000000'
-        $dc = '0x00000000'
+        $out = (& powercfg /q SCHEME_CURRENT $map[$key][0] $map[$key][1] 2>$null) -join ' '
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nu s-au putut citi valorile de alimentare pentru $key (cod $LASTEXITCODE)."
+        }
 
-if ($out -match 'AC.*?(0x[0-9a-fA-F]+)') { $ac = $Matches[1] }
-        if ($out -match 'DC.*?(0x[0-9a-fA-F]+)') { $dc = $Matches[1] }
+        if ($out -notmatch 'AC.*?(0x[0-9a-fA-F]+)') {
+            throw "Valoarea AC pentru $key nu a putut fi citita din powercfg."
+        }
+        $ac = $Matches[1]
 
-$result[$key] = @($ac, $dc)
+        if ($out -notmatch 'DC.*?(0x[0-9a-fA-F]+)') {
+            throw "Valoarea DC pentru $key nu a putut fi citita din powercfg."
+        }
+        $dc = $Matches[1]
+
+        $result[$key] = @($ac, $dc)
     }
 
 return $result
 }
 
 function Save-PowerBackup {
-    if (Test-Path $powerBackupPath) { return }
+    if (Test-Path -LiteralPath $powerBackupPath) {
+        $existingBackup = Get-ItemProperty `
+            -Path $powerBackupPath `
+            -ErrorAction Stop
 
-New-Item -Path $powerBackupPath -Force -ErrorAction SilentlyContinue | Out-Null
+        $requiredValues = @(
+            'ActiveScheme', 'MonitorAC', 'MonitorDC',
+            'StandbyAC', 'StandbyDC', 'DiskAC', 'DiskDC',
+            'HibernateAC', 'HibernateDC'
+        )
+        $isComplete = $null -ne $existingBackup
+        foreach ($name in $requiredValues) {
+            if ($null -eq $existingBackup -or
+                $null -eq $existingBackup.PSObject.Properties[$name] -or
+                $null -eq $existingBackup.PSObject.Properties[$name].Value) {
+                $isComplete = $false
+                break
+            }
+        }
 
-$scheme = Get-ActiveSchemeGuid
-    if ($scheme) {
-        Set-ItemProperty -Path $powerBackupPath -Name 'ActiveScheme' -Value $scheme
+        if ($isComplete) {
+            return
+        }
+
+        Remove-Item `
+            -LiteralPath $powerBackupPath `
+            -Recurse `
+            -Force `
+            -ErrorAction Stop
     }
 
-$timeouts = Get-PowerTimeouts
+    New-Item `
+        -Path $powerBackupPath `
+        -Force `
+        -ErrorAction Stop | Out-Null
 
-Set-ItemProperty -Path $powerBackupPath -Name 'MonitorAC'   -Value $timeouts.Monitor[0]
-    Set-ItemProperty -Path $powerBackupPath -Name 'MonitorDC'   -Value $timeouts.Monitor[1]
-    Set-ItemProperty -Path $powerBackupPath -Name 'StandbyAC'   -Value $timeouts.Standby[0]
-    Set-ItemProperty -Path $powerBackupPath -Name 'StandbyDC'   -Value $timeouts.Standby[1]
-    Set-ItemProperty -Path $powerBackupPath -Name 'DiskAC'      -Value $timeouts.Disk[0]
-    Set-ItemProperty -Path $powerBackupPath -Name 'DiskDC'      -Value $timeouts.Disk[1]
-    Set-ItemProperty -Path $powerBackupPath -Name 'HibernateAC' -Value $timeouts.Hibernate[0]
-    Set-ItemProperty -Path $powerBackupPath -Name 'HibernateDC' -Value $timeouts.Hibernate[1]
+    $scheme = Get-ActiveSchemeGuid
+    if (-not $scheme) {
+        throw 'Nu s-a putut salva planul de alimentare activ.'
+    }
+    Set-ItemProperty `
+        -Path $powerBackupPath `
+        -Name 'ActiveScheme' `
+        -Value $scheme `
+        -ErrorAction Stop
+
+    $timeouts = Get-PowerTimeouts
+
+    $backupValues = @{
+        MonitorAC   = $timeouts.Monitor[0]
+        MonitorDC   = $timeouts.Monitor[1]
+        StandbyAC   = $timeouts.Standby[0]
+        StandbyDC   = $timeouts.Standby[1]
+        DiskAC      = $timeouts.Disk[0]
+        DiskDC      = $timeouts.Disk[1]
+        HibernateAC = $timeouts.Hibernate[0]
+        HibernateDC = $timeouts.Hibernate[1]
+    }
+
+    foreach ($name in $backupValues.Keys) {
+        Set-ItemProperty `
+            -Path $powerBackupPath `
+            -Name $name `
+            -Value $backupValues[$name] `
+            -ErrorAction Stop
+    }
 }
 
 function Set-PowerTimeouts {
@@ -1335,14 +1395,53 @@ function Set-PowerTimeoutsNeverOnAc {
     }
 }
 
+function Restore-PowerTimeoutValues {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Backup
+    )
+
+    $settings = @(
+        [PSCustomObject]@{ Name = 'Monitor'; Subgroup = 'SUB_VIDEO'; Setting = 'VIDEOIDLE' }
+        [PSCustomObject]@{ Name = 'Standby'; Subgroup = 'SUB_SLEEP'; Setting = 'STANDBYIDLE' }
+        [PSCustomObject]@{ Name = 'Disk'; Subgroup = 'SUB_DISK'; Setting = 'DISKIDLE' }
+        [PSCustomObject]@{ Name = 'Hibernate'; Subgroup = 'SUB_SLEEP'; Setting = 'HIBERNATEIDLE' }
+    )
+
+    foreach ($setting in $settings) {
+        foreach ($powerType in @('AC', 'DC')) {
+            $propertyName = '{0}{1}' -f $setting.Name, $powerType
+            $rawValue = [string]$Backup.$propertyName
+            if ($rawValue -notmatch '^0x[0-9a-fA-F]{1,8}$') {
+                throw "Valoarea salvata pentru $propertyName nu este valida."
+            }
+
+            $seconds = [Convert]::ToUInt64($rawValue.Substring(2), 16)
+            $command = if ($powerType -eq 'AC') { '/setacvalueindex' } else { '/setdcvalueindex' }
+            & powercfg $command $Backup.ActiveScheme $setting.Subgroup $setting.Setting $seconds | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Nu s-a putut restaura valoarea $propertyName (cod $LASTEXITCODE)."
+            }
+        }
+    }
+
+    & powercfg /setactive $Backup.ActiveScheme | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nu s-au putut aplica setarile de alimentare restaurate (cod $LASTEXITCODE)."
+    }
+}
+
 function Get-Or-Create-UltimateScheme {
     if (Test-Path $powerBackupPath) {
-        $existing = (Get-ItemProperty -Path $powerBackupPath -ErrorAction SilentlyContinue).UltimateGuid
+        $existing = (Get-ItemProperty -Path $powerBackupPath -ErrorAction Stop).UltimateGuid
         if ($existing) { return $existing }
     }
 
 $ultimateSource = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
     $dupOut = (powercfg /duplicatescheme $ultimateSource 2>$null) -join ' '
+if ($LASTEXITCODE -ne 0) {
+    throw "Nu s-a putut crea planul Ultimate Performance (cod $LASTEXITCODE)."
+}
 
 if ($dupOut -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
         $guid = $Matches[1]
@@ -1358,33 +1457,32 @@ return $null
 }
 
 function Restore-PowerBackup {
-    if (-not (Test-Path $powerBackupPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $powerBackupPath)) { return $false }
 
-$props = Get-ItemProperty -Path $powerBackupPath -ErrorAction SilentlyContinue
+    $props = Get-ItemProperty `
+        -Path $powerBackupPath `
+        -ErrorAction Stop
 
-if ($props.ActiveScheme) {
-        powercfg /setactive $props.ActiveScheme | Out-Null
+    if (-not $props.ActiveScheme) {
+        throw 'Backup-ul nu contine planul de alimentare initial.'
     }
 
-$monitorAc   = [int]([Convert]::ToInt64($props.MonitorAC, 16) / 60)
-    $monitorDc   = [int]([Convert]::ToInt64($props.MonitorDC, 16) / 60)
-    $standbyAc   = [int]([Convert]::ToInt64($props.StandbyAC, 16) / 60)
-    $standbyDc   = [int]([Convert]::ToInt64($props.StandbyDC, 16) / 60)
-    $diskAc      = [int]([Convert]::ToInt64($props.DiskAC, 16) / 60)
-    $diskDc      = [int]([Convert]::ToInt64($props.DiskDC, 16) / 60)
-    $hibernateAc = [int]([Convert]::ToInt64($props.HibernateAC, 16) / 60)
-    $hibernateDc = [int]([Convert]::ToInt64($props.HibernateDC, 16) / 60)
+Restore-PowerTimeoutValues -Backup $props
 
-Set-PowerTimeouts @{
-        Monitor   = @($monitorAc, $monitorDc)
-        Standby   = @($standbyAc, $standbyDc)
-        Disk      = @($diskAc, $diskDc)
-        Hibernate = @($hibernateAc, $hibernateDc)
+    if ($props.UltimateGuid -and $props.UltimateGuid -ne $props.ActiveScheme) {
+        & powercfg /delete $props.UltimateGuid | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Setarile au fost restaurate, dar planul Ultimate creat de toolkit nu a putut fi sters (cod $LASTEXITCODE)."
+        }
     }
 
-Remove-Item -Path $powerBackupPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item `
+        -LiteralPath $powerBackupPath `
+        -Recurse `
+        -Force `
+        -ErrorAction Stop
 
-return $true
+    return $true
 }
 
 # ==================================================
@@ -1407,10 +1505,12 @@ $ultimate = Get-Or-Create-UltimateScheme
 
 if ($ultimate) {
             & powercfg /setactive $ultimate | Out-Null
-        }
-        else {
-            & powercfg /setactive SCHEME_MIN | Out-Null
-        }
+    $activePerformancePlan = 'Ultimate Performance'
+}
+else {
+    & powercfg /setactive SCHEME_MIN | Out-Null
+    $activePerformancePlan = 'High Performance'
+}
 
         if ($LASTEXITCODE -ne 0) {
             throw "Nu s-a putut activa planul de performanta (cod $LASTEXITCODE)."
@@ -1424,7 +1524,7 @@ if (Test-HasBattery) {
                 Hibernate = @(0, 180)
             }
 
-Show-Status 'Planul Ultimate Performance este activ. La priza nu se opreste ecranul sau PC-ul; pe baterie, oprirea automata ramane activa.'
+Show-Status "$activePerformancePlan este activ. La priza nu se opreste ecranul sau PC-ul; pe baterie, oprirea automata ramane activa."
         }
         else {
             Set-PowerTimeouts @{
@@ -1434,7 +1534,7 @@ Show-Status 'Planul Ultimate Performance este activ. La priza nu se opreste ecra
                 Hibernate = @(0, 0)
             }
 
-Show-Status 'Planul Ultimate Performance este activ. Oprirea automata a ecranului si a PC-ului este dezactivata.'
+Show-Status "$activePerformancePlan este activ. Oprirea automata a ecranului si a PC-ului este dezactivata."
         }
 
         Refresh-PowerSettingsPage
@@ -1579,6 +1679,491 @@ Show-Status 'Nu exista setari salvate de restaurat.'
 # 4. Windows / Office
 # ==================================================
 
+$tabService = New-Object System.Windows.Forms.TabPage
+$tabService.Text = 'Service'
+[void]$tabs.TabPages.Add($tabService)
+
+$serviceInfoLabel = New-Object System.Windows.Forms.Label
+$serviceInfoLabel.Text = 'Verificare si reparare Windows. Comenzile se deschid intr-o fereastra separata pentru a afisa rezultatele.'
+$serviceInfoLabel.Location = New-Object System.Drawing.Point(20, 20)
+$serviceInfoLabel.Size = New-Object System.Drawing.Size(535, 38)
+$tabService.Controls.Add($serviceInfoLabel)
+
+function Start-ServiceCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Title,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CommandScript,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Confirmation,
+
+        [bool]$RequiresAdministrator = $false
+    )
+
+    $confirmationResult = [System.Windows.Forms.MessageBox]::Show(
+        $Confirmation,
+        "Windows Toolkit - $Title",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmationResult -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    try {
+        $isAdministrator = [Security.Principal.WindowsPrincipal]::new(
+            [Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+        $consoleScript = @"
+`$ErrorActionPreference = 'Stop'
+`$Host.UI.RawUI.WindowTitle = 'Windows Toolkit - $Title'
+Write-Host 'Windows Toolkit - $Title' -ForegroundColor Cyan
+Write-Host 'La final, apasa Enter pentru a inchide aceasta fereastra.'
+Write-Host ''
+try {
+$CommandScript
+}
+catch {
+    Write-Host ("`r`nOperatiunea a esuat: " + `$_.Exception.Message) -ForegroundColor Red
+}
+Write-Host ''
+Read-Host 'Gata'
+"@
+        $encodedCommand = [Convert]::ToBase64String(
+            [Text.Encoding]::Unicode.GetBytes($consoleScript)
+        )
+        $arguments = @(
+            '-NoProfile'
+            '-ExecutionPolicy'
+            'Bypass'
+            '-EncodedCommand'
+            $encodedCommand
+        )
+
+        $startParameters = @{
+            FilePath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+            ArgumentList = $arguments
+            ErrorAction = 'Stop'
+        }
+        if ($RequiresAdministrator -and -not $isAdministrator) {
+            $startParameters.Verb = 'RunAs'
+        }
+
+        Start-Process @startParameters | Out-Null
+        Show-Status "$Title a fost pornit intr-o fereastra separata."
+    }
+    catch {
+        Show-Status "Nu s-a putut porni $Title."
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+}
+
+$dismButton = New-Object System.Windows.Forms.Button
+$dismButton.Text = 'Reparare Windows (DISM)'
+$dismButton.Location = New-Object System.Drawing.Point(20, 75)
+$dismButton.Size = New-Object System.Drawing.Size(245, 42)
+$tabService.Controls.Add($dismButton)
+$dismButton.Add_Click({
+    Start-ServiceCheck `
+        -Title 'DISM RestoreHealth' `
+        -CommandScript '& dism.exe /Online /Cleanup-Image /RestoreHealth; if ($LASTEXITCODE -ne 0) { throw "DISM s-a incheiat cu codul $LASTEXITCODE." }' `
+        -Confirmation 'DISM va verifica si repara imaginea Windows folosind Windows Update. Poate dura mult. Continui?' `
+        -RequiresAdministrator $true
+})
+
+$sfcButton = New-Object System.Windows.Forms.Button
+$sfcButton.Text = 'Verificare fisiere (SFC)'
+$sfcButton.Location = New-Object System.Drawing.Point(290, 75)
+$sfcButton.Size = New-Object System.Drawing.Size(245, 42)
+$tabService.Controls.Add($sfcButton)
+$sfcButton.Add_Click({
+    Start-ServiceCheck `
+        -Title 'SFC Scannow' `
+        -CommandScript '& sfc.exe /scannow; if ($LASTEXITCODE -ne 0) { throw "SFC s-a incheiat cu codul $LASTEXITCODE." }' `
+        -Confirmation 'SFC va verifica si incerca sa repare fisierele de sistem Windows. Operatiunea poate dura. Continui?' `
+        -RequiresAdministrator $true
+})
+
+$diskCheckButton = New-Object System.Windows.Forms.Button
+$diskCheckButton.Text = 'Verificare disc (CHKDSK)'
+$diskCheckButton.Location = New-Object System.Drawing.Point(20, 135)
+$diskCheckButton.Size = New-Object System.Drawing.Size(245, 42)
+$tabService.Controls.Add($diskCheckButton)
+$diskCheckButton.Add_Click({
+    $systemDriveForCheck = $env:SystemDrive
+    $diskCommand = '& chkdsk.exe "{0}" /scan; if ($LASTEXITCODE -ne 0) {{ throw "CHKDSK s-a incheiat cu codul $LASTEXITCODE." }}' -f $systemDriveForCheck
+    Start-ServiceCheck `
+        -Title 'CHKDSK Scan' `
+        -CommandScript $diskCommand `
+        -Confirmation "CHKDSK va scana discul $systemDriveForCheck online fara reparare automata sau programare la repornire. Continui?" `
+        -RequiresAdministrator $true
+})
+
+$windowsUpdateButton = New-Object System.Windows.Forms.Button
+$windowsUpdateButton.Text = 'Verificare Windows Update'
+$windowsUpdateButton.Location = New-Object System.Drawing.Point(290, 135)
+$windowsUpdateButton.Size = New-Object System.Drawing.Size(245, 42)
+$tabService.Controls.Add($windowsUpdateButton)
+$windowsUpdateButton.Add_Click({
+    $updateSearchScript = @'
+$session = New-Object -ComObject Microsoft.Update.Session
+$searcher = $session.CreateUpdateSearcher()
+Write-Host 'Se cauta actualizari disponibile. Aceasta operatiune poate dura...' -ForegroundColor Yellow
+$result = $searcher.Search("IsInstalled=0 and Type='Software'")
+Write-Host ("Actualizari disponibile: {0}" -f $result.Updates.Count) -ForegroundColor Green
+for ($index = 0; $index -lt $result.Updates.Count; $index++) {
+    Write-Host ("- {0}" -f $result.Updates.Item($index).Title)
+}
+'@
+    Start-ServiceCheck `
+        -Title 'Windows Update' `
+        -CommandScript $updateSearchScript `
+        -Confirmation 'Se va cauta actualizari Windows disponibile, fara a le instala. Continui?' `
+        -RequiresAdministrator $false
+})
+
+$wingetListButton = New-Object System.Windows.Forms.Button
+$wingetListButton.Text = 'Aplicatii instalate (winget)'
+$wingetListButton.Location = New-Object System.Drawing.Point(20, 195)
+$wingetListButton.Size = New-Object System.Drawing.Size(245, 42)
+$tabService.Controls.Add($wingetListButton)
+$wingetListButton.Add_Click({
+    $wingetCommand = Get-Command -Name 'winget.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $wingetCommand) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'winget nu este disponibil. Foloseste mai intai Install Apps pentru a configura Microsoft App Installer.',
+            'Windows Toolkit',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        return
+    }
+
+    $wingetListScript = '& winget.exe list --accept-source-agreements; if ($LASTEXITCODE -ne 0) { throw "winget list s-a incheiat cu codul $LASTEXITCODE." }'
+    Start-ServiceCheck `
+        -Title 'Aplicatii instalate' `
+        -CommandScript $wingetListScript `
+        -Confirmation 'Se va afisa lista aplicatiilor instalate recunoscute de winget. Continui?' `
+        -RequiresAdministrator $false
+})
+
+$serviceNoteLabel = New-Object System.Windows.Forms.Label
+$serviceNoteLabel.Text = 'Recomandare: ruleaza DISM inainte de SFC daca Windows are probleme. Unele comenzi cer confirmarea UAC.'
+$serviceNoteLabel.Location = New-Object System.Drawing.Point(20, 255)
+$serviceNoteLabel.Size = New-Object System.Drawing.Size(535, 42)
+$tabService.Controls.Add($serviceNoteLabel)
+
+$tabAppService = New-Object System.Windows.Forms.TabPage
+$tabAppService.Text = 'App Service'
+[void]$tabs.TabPages.Add($tabAppService)
+
+$appServiceInfo = New-Object System.Windows.Forms.Label
+$appServiceInfo.Text = 'Unelte pentru diagnostic si mentenanta PC. Selecteaza aplicatii pentru instalare, reparare sau dezinstalare.'
+$appServiceInfo.Location = New-Object System.Drawing.Point(20, 18)
+$appServiceInfo.Size = New-Object System.Drawing.Size(535, 36)
+$tabAppService.Controls.Add($appServiceInfo)
+
+$appServiceNote = New-Object System.Windows.Forms.Label
+$appServiceNote.Text = 'Treci cu mouse-ul peste o aplicatie pentru a vedea ce face.'
+$appServiceNote.Location = New-Object System.Drawing.Point(20, 280)
+$appServiceNote.Size = New-Object System.Drawing.Size(535, 45)
+$tabAppService.Controls.Add($appServiceNote)
+
+$serviceAppList = @(
+    [PSCustomObject]@{ Name = 'Hard Disk Sentinel Standard'; Id = 'JanosMathe.HardDiskSentinel.Standard'; Architecture = ''; Description = 'Monitorizeaza sanatatea si performanta HDD-urilor si SSD-urilor folosind date SMART si teste de diagnostic. Versiunea Standard este shareware.' },
+    [PSCustomObject]@{ Name = 'CrystalDiskInfo'; Id = 'CrystalDewWorld.CrystalDiskInfo'; Architecture = ''; Description = 'Afiseaza starea de sanatate, temperatura si informatiile SMART ale HDD-urilor si SSD-urilor.' },
+    [PSCustomObject]@{ Name = 'HWiNFO'; Id = 'REALiX.HWiNFO'; Architecture = ''; Description = 'Afiseaza informatii detaliate despre componente si senzori, inclusiv temperaturi, tensiuni si turatii.' },
+    [PSCustomObject]@{ Name = 'CPU-Z'; Id = 'CPUID.CPU-Z'; Architecture = ''; Description = 'Identifica procesorul, placa de baza si memoria RAM; poate afisa frecvente si temporizari.' },
+    [PSCustomObject]@{ Name = 'GPU-Z'; Id = 'TechPowerUp.GPU-Z'; Architecture = ''; Description = 'Afiseaza modelul placii video, memoria, frecventele si datele senzorilor GPU.' },
+    [PSCustomObject]@{ Name = 'CrystalDiskMark'; Id = 'CrystalDewWorld.CrystalDiskMark'; Architecture = ''; Description = 'Masuratori de viteza pentru HDD-uri si SSD-uri. Testele pot solicita discul; evita-le pe dispozitive cu probleme sau date nesalvate.' },
+    [PSCustomObject]@{ Name = 'Rufus'; Id = 'Rufus.Rufus'; Architecture = ''; Description = 'Creeaza stick-uri USB bootabile pentru instalarea sau recuperarea sistemelor. Scrierea imaginii sterge continutul stick-ului selectat.' },
+    [PSCustomObject]@{ Name = 'Everything'; Id = 'voidtools.Everything'; Architecture = ''; Description = 'Cauta rapid fisiere si foldere dupa nume pe volumele NTFS indexate.' },
+    [PSCustomObject]@{ Name = 'TreeSize Free'; Id = 'JAMSoftware.TreeSize.Free'; Architecture = ''; Description = 'Analizeaza utilizarea spatiului pe disc si arata folderele si fisierele care ocupa cel mai mult.' },
+    [PSCustomObject]@{ Name = 'Revo Uninstaller'; Id = 'RevoUninstaller.RevoUninstaller'; Architecture = ''; Description = 'Dezinstaleaza aplicatii si poate cauta fisiere si intrari de registru ramase dupa dezinstalare.' }
+)
+$serviceAppChecks = @()
+$serviceAppChecks = @()
+$serviceAppLeftColumnCount = [int][Math]::Ceiling($serviceAppList.Count / 2)
+for ($i = 0; $i -lt $serviceAppList.Count; $i++) {
+    if ($i -lt $serviceAppLeftColumnCount) {
+        $columnX = 20
+        $row = $i
+    }
+    else {
+        $columnX = 300
+        $row = $i - $serviceAppLeftColumnCount
+    }
+
+    $check = New-Object System.Windows.Forms.CheckBox
+    $check.Text = $serviceAppList[$i].Name
+    $check.Tag = $serviceAppList[$i]
+    $check.Location = New-Object System.Drawing.Point($columnX, (55 + ($row * 30)))
+    $check.Size = New-Object System.Drawing.Size(265, 24)
+    $check.UseVisualStyleBackColor = $true
+    $tabAppService.Controls.Add($check)
+    $appToolTip.SetToolTip($check, $serviceAppList[$i].Description)
+    $descriptionLabel = $appServiceNote
+    $description = $serviceAppList[$i].Description
+    $check.Add_MouseEnter({
+        $descriptionLabel.Text = $description
+    }.GetNewClosure())
+    $check.Add_MouseLeave({
+        $descriptionLabel.Text = 'Treci cu mouse-ul peste o aplicatie pentru a vedea ce face.'
+    }.GetNewClosure())
+    $serviceAppChecks += $check
+}
+
+function Invoke-AppServiceWinget {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Operation
+    )
+
+    $wingetCommand = Get-Command -Name 'winget.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $wingetCommand) {
+        throw 'winget nu este disponibil. Configureaza Microsoft App Installer din fila Install Apps.'
+    }
+
+    Show-Status "$Operation..."
+    $process = Start-Process `
+        -FilePath $wingetCommand.Source `
+        -ArgumentList $Arguments `
+        -Wait `
+        -PassThru `
+        -ErrorAction Stop
+
+    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+        throw "$Operation a esuat. Cod winget: $($process.ExitCode)."
+    }
+    return $process.ExitCode
+}
+
+function Get-SelectedServiceApps {
+    return @(
+        $serviceAppChecks |
+            Where-Object { $_.Checked } |
+            ForEach-Object { $_.Tag }
+    )
+}
+
+$appServiceInstallButton = New-Object System.Windows.Forms.Button
+$appServiceInstallButton.Text = 'Install'
+$appServiceInstallButton.Location = New-Object System.Drawing.Point(20, 225)
+$appServiceInstallButton.Size = New-Object System.Drawing.Size(100, 38)
+$tabAppService.Controls.Add($appServiceInstallButton)
+$appServiceInstallButton.Add_Click({
+    $selectedApps = @(Get-SelectedServiceApps)
+    if ($selectedApps.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Selecteaza cel putin o aplicatie.',
+            'App Service'
+        ) | Out-Null
+        return
+    }
+
+    $appServiceInstallButton.Enabled = $false
+    try {
+        Ensure-WingetAvailable | Out-Null
+        $failed = @()
+        foreach ($app in $selectedApps) {
+            if (-not (Install-WingetPackage -Id $app.Id -Name $app.Name -Architecture $app.Architecture)) {
+                $failed += $app.Name
+            }
+        }
+        if ($failed.Count -gt 0) {
+            Show-Status "Instalare terminata cu erori: $($failed -join ', ')"
+        }
+        else {
+            Show-Status 'Aplicatiile selectate au fost instalate.'
+        }
+    }
+    catch {
+        Show-Status 'Instalarea aplicatiilor de service a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'App Service - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+    finally {
+        $appServiceInstallButton.Enabled = $true
+    }
+})
+
+$appServiceCheckUpdatesButton = New-Object System.Windows.Forms.Button
+$appServiceCheckUpdatesButton.Text = 'Check Updates'
+$appServiceCheckUpdatesButton.Location = New-Object System.Drawing.Point(130, 225)
+$appServiceCheckUpdatesButton.Size = New-Object System.Drawing.Size(105, 38)
+$tabAppService.Controls.Add($appServiceCheckUpdatesButton)
+$appServiceCheckUpdatesButton.Add_Click({
+    try {
+        Invoke-AppServiceWinget `
+            -Arguments @('upgrade', '--accept-source-agreements', '--disable-interactivity') `
+            -Operation 'Se verifica actualizarile aplicatiilor' | Out-Null
+        Show-Status 'Verificarea actualizarilor s-a incheiat.'
+    }
+    catch {
+        Show-Status 'Verificarea actualizarilor a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'App Service - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+})
+
+$appServiceUpdateAllButton = New-Object System.Windows.Forms.Button
+$appServiceUpdateAllButton.Text = 'Update All'
+$appServiceUpdateAllButton.Location = New-Object System.Drawing.Point(245, 225)
+$appServiceUpdateAllButton.Size = New-Object System.Drawing.Size(100, 38)
+$tabAppService.Controls.Add($appServiceUpdateAllButton)
+$appServiceUpdateAllButton.Add_Click({
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        'Aceasta actiune incearca sa actualizeze toate aplicatiile recunoscute de winget, nu doar cele bifate. Continui?',
+        'Confirma actualizarea tuturor aplicatiilor',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    try {
+        Invoke-AppServiceWinget `
+            -Arguments @('upgrade', '--all', '--silent', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity') `
+            -Operation 'Se actualizeaza toate aplicatiile' | Out-Null
+        Show-Status 'Actualizarea tuturor aplicatiilor s-a incheiat.'
+    }
+    catch {
+        Show-Status 'Actualizarea aplicatiilor a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'App Service - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+})
+
+$appServiceRepairButton = New-Object System.Windows.Forms.Button
+$appServiceRepairButton.Text = 'Repair'
+$appServiceRepairButton.Location = New-Object System.Drawing.Point(355, 225)
+$appServiceRepairButton.Size = New-Object System.Drawing.Size(90, 38)
+$tabAppService.Controls.Add($appServiceRepairButton)
+$appServiceRepairButton.Add_Click({
+    $selectedApps = @(Get-SelectedServiceApps)
+    if ($selectedApps.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Selecteaza aplicatiile pe care vrei sa incerci repararea.',
+            'App Service'
+        ) | Out-Null
+        return
+    }
+
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        'Winget poate repara doar instalatoarele care implementeaza aceasta functie. Unele aplicatii vor raporta ca repararea nu este disponibila. Continui?',
+        'Reparare aplicatii selectate',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $failed = @()
+    foreach ($app in $selectedApps) {
+        try {
+            Invoke-AppServiceWinget `
+                -Arguments @('repair', '--id', $app.Id, '--exact', '--silent', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity') `
+                -Operation "Se repara $($app.Name)" | Out-Null
+        }
+        catch {
+            $failed += "$($app.Name): $($_.Exception.Message)"
+        }
+    }
+    if ($failed.Count -gt 0) {
+        Show-Status "Unele reparatii nu au reusit: $($failed.Count)."
+        [System.Windows.Forms.MessageBox]::Show(
+            ($failed -join [Environment]::NewLine),
+            'App Service - Rezultatul repararii',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+    }
+    else {
+        Show-Status 'Repararea aplicatiilor selectate s-a incheiat.'
+    }
+})
+
+$appServiceUninstallButton = New-Object System.Windows.Forms.Button
+$appServiceUninstallButton.Text = 'Uninstall'
+$appServiceUninstallButton.Location = New-Object System.Drawing.Point(455, 225)
+$appServiceUninstallButton.Size = New-Object System.Drawing.Size(100, 38)
+$tabAppService.Controls.Add($appServiceUninstallButton)
+$appServiceUninstallButton.Add_Click({
+    $selectedApps = @(Get-SelectedServiceApps)
+    if ($selectedApps.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Selecteaza aplicatiile pe care vrei sa le dezinstalezi.',
+            'App Service'
+        ) | Out-Null
+        return
+    }
+
+    $names = ($selectedApps | ForEach-Object { $_.Name }) -join ', '
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        "Se vor dezinstala urmatoarele aplicatii:`r`n$names`r`n`r`nContinui?",
+        'Confirma dezinstalarea',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $failed = @()
+    foreach ($app in $selectedApps) {
+        try {
+            Invoke-AppServiceWinget `
+                -Arguments @('uninstall', '--id', $app.Id, '--exact', '--silent', '--accept-source-agreements', '--disable-interactivity') `
+                -Operation "Se dezinstaleaza $($app.Name)" | Out-Null
+        }
+        catch {
+            $failed += "$($app.Name): $($_.Exception.Message)"
+        }
+    }
+    if ($failed.Count -gt 0) {
+        Show-Status "Unele dezinstalari nu au reusit: $($failed.Count)."
+        [System.Windows.Forms.MessageBox]::Show(
+            ($failed -join [Environment]::NewLine),
+            'App Service - Rezultatul dezinstalarii',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+    }
+    else {
+        Show-Status 'Dezinstalarea aplicatiilor selectate s-a incheiat.'
+    }
+})
+
 $tabActivation = New-Object System.Windows.Forms.TabPage
 $tabActivation.Text = 'Windows / Office'
 [void]$tabs.TabPages.Add($tabActivation)
@@ -1652,18 +2237,12 @@ $officeDownloadButton.Add_Click({
             throw 'Nu s-a putut determina locatia folderului Downloads.'
         }
 
-        $installerPath = Join-Path -Path $downloadsPath -ChildPath 'OfficeSetup.exe'
-        if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
-            Remove-Item -LiteralPath $installerPath -Force -ErrorAction Stop
-        }
+        $installerName = 'OfficeSetup_{0}.exe' -f [Guid]::NewGuid().ToString('N')
+        $installerPath = Join-Path -Path $downloadsPath -ChildPath $installerName
 
-        $downloaded = Invoke-RemoteFileDownload `
+        Invoke-RemoteFileDownload `
             -Url 'https://c2rsetup.officeapps.live.com/c2r/download.aspx?ProductreleaseID=O365ProPlusRetail&platform=x64&language=en-us&version=O16GA' `
-            -Destination $installerPath
-
-        if (-not $downloaded) {
-            return
-        }
+            -Destination $installerPath | Out-Null
 
         Show-Status 'Se verifica semnatura installerului Microsoft 365...'
         $signature = Get-AuthenticodeSignature -FilePath $installerPath -ErrorAction Stop
