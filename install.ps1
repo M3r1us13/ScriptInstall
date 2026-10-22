@@ -426,34 +426,142 @@ return $true
 # Instalare aplicatie prin winget
 # ==============================
 
+function Ensure-WingetAvailable {
+    $wingetCommand = Get-Command `
+        -Name 'winget.exe' `
+        -ErrorAction SilentlyContinue
+
+    if ($null -ne $wingetCommand) {
+        return $wingetCommand.Source
+    }
+
+    $installerPath = Join-Path `
+        -Path ([System.IO.Path]::GetTempPath()) `
+        -ChildPath ('WindowsToolkit-AppInstaller_{0}.msixbundle' -f [Guid]::NewGuid().ToString('N'))
+    $storeUrl = 'https://apps.microsoft.com/detail/9nblggh4nns1'
+    $registrationError = $null
+
+    try {
+        Show-Status -Message 'Se configureaza Microsoft App Installer...'
+
+        try {
+            Add-AppxPackage `
+                -RegisterByFamilyName `
+                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
+                -ErrorAction Stop
+        }
+        catch {
+            $registrationError = $_.Exception.Message
+        }
+
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            $wingetCommand = Get-Command `
+                -Name 'winget.exe' `
+                -ErrorAction SilentlyContinue
+
+            if ($null -ne $wingetCommand) {
+                return $wingetCommand.Source
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        $downloaded = Invoke-RemoteFileDownload `
+            -Url 'https://aka.ms/getwinget' `
+            -Destination $installerPath
+
+        if (-not $downloaded) {
+            throw 'Pachetul Microsoft App Installer nu a putut fi descarcat.'
+        }
+
+        Show-Status -Message 'Se instaleaza Microsoft App Installer...'
+        Add-AppxPackage `
+            -Path $installerPath `
+            -ErrorAction Stop
+
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            $wingetCommand = Get-Command `
+                -Name 'winget.exe' `
+                -ErrorAction SilentlyContinue
+
+            if ($null -ne $wingetCommand) {
+                break
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        if ($null -eq $wingetCommand) {
+            Add-AppxPackage `
+                -RegisterByFamilyName `
+                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
+                -ErrorAction Stop
+
+            for ($attempt = 0; $attempt -lt 5; $attempt++) {
+                $wingetCommand = Get-Command `
+                    -Name 'winget.exe' `
+                    -ErrorAction SilentlyContinue
+
+                if ($null -ne $wingetCommand) {
+                    break
+                }
+
+                Start-Sleep -Seconds 1
+            }
+        }
+
+        if ($null -eq $wingetCommand) {
+            throw 'App Installer a fost instalat, dar winget nu este disponibil in aceasta sesiune.'
+        }
+
+        return $wingetCommand.Source
+    }
+    catch {
+        $details = $_.Exception.Message
+        if ($registrationError) {
+            $details = "$details`r`nInregistrarea initiala: $registrationError"
+        }
+
+        throw "Nu s-a putut instala sau configura automat Microsoft App Installer. $details`r`nInstaleaza-l din Microsoft Store: $storeUrl"
+    }
+    finally {
+        if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
+            try {
+                Remove-Item `
+                    -LiteralPath $installerPath `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Nu s-a putut sterge pachetul temporar $installerPath : $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 function Install-WingetPackage {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Id,
 
-[Parameter(Mandatory = $true)]
-        [string]$Name
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [string]$Architecture = ''
     )
 
-$wingetCommand = Get-Command `
+    $wingetCommand = Get-Command `
         -Name 'winget.exe' `
         -ErrorAction SilentlyContinue
 
-if ($null -eq $wingetCommand) {
-        [System.Windows.Forms.MessageBox]::Show(
-            'winget nu este instalat. Instaleaza App Installer din Microsoft Store.',
-            'Windows Toolkit',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        ) | Out-Null
-
-return $false
+    if ($null -eq $wingetCommand) {
+        throw 'winget nu este disponibil dupa configurarea Microsoft App Installer.'
     }
 
-try {
+    try {
         Show-Status -Message "Se instaleaza $Name..."
 
-$arguments = @(
+        $arguments = @(
             'install'
             '--id'
             $Id
@@ -464,29 +572,33 @@ $arguments = @(
             '--disable-interactivity'
         )
 
-$process = Start-Process `
+        if ($Architecture) {
+            $arguments += @('--architecture', $Architecture)
+        }
+
+        $process = Start-Process `
             -FilePath $wingetCommand.Source `
             -ArgumentList $arguments `
             -Wait `
             -PassThru `
             -WindowStyle Hidden
 
-if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+        if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
             Show-Status `
                 -Message "Instalarea pentru $Name a esuat. Cod: $($process.ExitCode)"
 
-return $false
+            return $false
         }
 
-Show-Status `
+        Show-Status `
             -Message "$Name a fost instalat. Se cauta shortcut-ul..."
 
-Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 3
 
-$shortcutCreated = New-DesktopShortcutFromStartMenu `
+        $shortcutCreated = New-DesktopShortcutFromStartMenu `
             -AppName $Name
 
-if ($shortcutCreated) {
+        if ($shortcutCreated) {
             Show-Status `
                 -Message "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
         }
@@ -495,20 +607,20 @@ if ($shortcutCreated) {
                 -Message "$Name a fost instalat, dar shortcut-ul nu a fost gasit."
         }
 
-return $true
+        return $true
     }
     catch {
         Show-Status `
             -Message "Instalarea pentru $Name a esuat."
 
-[System.Windows.Forms.MessageBox]::Show(
+        [System.Windows.Forms.MessageBox]::Show(
             "Eroare la instalarea aplicatiei ${Name}:`r`n$($_.Exception.Message)",
             'Windows Toolkit - Eroare',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
 
-return $false
+        return $false
     }
 }
 
@@ -571,65 +683,6 @@ return $true
     }
 }
 
-function Install-WingetPackage {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Id,
-
-[Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            'winget nu este instalat. Instaleaza App Installer din Microsoft Store.',
-            'Windows Toolkit'
-        )
-        return
-    }
-
-Show-Status "Se instaleaza $Name ..."
-
-$arguments = @(
-        'install',
-        '--id', $Id,
-        '--exact',
-        '--silent',
-        '--accept-package-agreements',
-        '--accept-source-agreements',
-        '--disable-interactivity'
-    )
-
-$process = Start-Process `
-    -FilePath 'winget.exe' `
-    -ArgumentList $arguments `
-    -Wait `
-    -PassThru `
-    -WindowStyle Hidden
-
-
-if ($process.ExitCode -eq 0) {
-        Show-Status "$Name a fost instalat. Se cauta shortcut-ul..."
-
-# Asteapta ca instalatorul sa creeze shortcut-ul in Start Menu
-        Start-Sleep -Seconds 3
-
-$shortcutCreated = New-DesktopShortcutFromStartMenu -AppName $Name
-
-if ($shortcutCreated) {
-            Show-Status "$Name a fost instalat si shortcut-ul a fost creat pe Desktop."
-        }
-        else {
-            Show-Status "$Name a fost instalat, dar nu are shortcut disponibil in Start Menu."
-        }
-    }
-    else {
-        Show-Status "Instalarea pentru $Name a esuat. Cod: $($process.ExitCode)"
-    }
-}
-
-
-
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Windows Toolkit'
 $form.Size = New-Object System.Drawing.Size(620, 545)
@@ -648,39 +701,57 @@ $tabApps.Text = 'Install Apps'
 [void]$tabs.TabPages.Add($tabApps)
 
 $appList = @(
-    @('Google Chrome', 'Google.Chrome'),
-    @('Brave', 'Brave.Brave'),
-    @('Adobe Acrobat Reader', 'Adobe.Acrobat.Reader.64-bit'),
-    @('TeamViewer', 'TeamViewer.TeamViewer'),
-    @('UltraViewer', 'DucFabulous.UltraViewer'),
-    @('AnyDesk', 'AnyDeskSoftwareGmbH.AnyDesk'),
-    @('WinRAR', 'RARLab.WinRAR'),
-    @('VLC Media Player', 'VideoLAN.VLC'),
-    @('7-Zip', '7zip.7zip'),
-    @('Spotify', 'Spotify.Spotify'),
-    @('Notepad++', 'Notepad++.Notepad++')
+    [PSCustomObject]@{ Name = 'Google Chrome'; Id = 'Google.Chrome'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Brave'; Id = 'Brave.Brave'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Adobe Acrobat Reader'; Id = 'Adobe.Acrobat.Reader.64-bit'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'TeamViewer'; Id = 'TeamViewer.TeamViewer'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'UltraViewer'; Id = 'DucFabulous.UltraViewer'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'AnyDesk'; Id = 'AnyDeskSoftwareGmbH.AnyDesk'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'WinRAR'; Id = 'RARLab.WinRAR'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'VLC Media Player'; Id = 'VideoLAN.VLC'; Architecture = '' },
+    [PSCustomObject]@{ Name = '7-Zip'; Id = '7zip.7zip'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Spotify'; Id = 'Spotify.Spotify'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Java 8 x64 (Temurin / AdoptOpenJDK)'; Id = 'EclipseAdoptium.Temurin.8.JRE'; Architecture = 'x64' },
+    [PSCustomObject]@{ Name = 'Google Earth Pro'; Id = 'Google.EarthPro'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Winamp'; Id = 'Winamp.Winamp'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Malwarebytes'; Id = 'Malwarebytes.Malwarebytes'; Architecture = '' },
+    [PSCustomObject]@{ Name = 'Steam'; Id = 'Valve.Steam'; Architecture = '' }
 )
 
 $appChecks = @()
+$leftColumnCount = [int][Math]::Ceiling($appList.Count / 2)
 
 for ($i = 0; $i -lt $appList.Count; $i++) {
-    $check = New-Object System.Windows.Forms.CheckBox
-    $check.Text = $appList[$i][0]
-    $check.Tag = $appList[$i][1]
-    $check.Location = New-Object System.Drawing.Point(
-        25,
-        (15 + ($i * 29))
-    )
-    $check.AutoSize = $true
+    if ($i -lt $leftColumnCount) {
+        $columnX = 20
+        $row = $i
+    }
+    else {
+        $columnX = 300
+        $row = $i - $leftColumnCount
+    }
 
-$tabApps.Controls.Add($check)
+    $app = $appList[$i]
+    $check = New-Object System.Windows.Forms.CheckBox
+    $check.Text = $app.Name
+    $check.Tag = $app
+    $check.Location = New-Object System.Drawing.Point(
+        $columnX,
+        (15 + ($row * 32))
+    )
+    $check.Size = New-Object System.Drawing.Size(260, 24)
+    $check.UseVisualStyleBackColor = $true
+
+    $tabApps.Controls.Add($check)
     $appChecks += $check
+
 }
 
 $installButton = New-Object System.Windows.Forms.Button
 $installButton.Text = 'Install Selected'
 $installButton.Size = New-Object System.Drawing.Size(160, 38)
-$installButton.Location = New-Object System.Drawing.Point(205, 350)
+$installButton.Location = New-Object System.Drawing.Point(205, 320)
 $tabApps.Controls.Add($installButton)
 
 $installButton.Add_Click({
@@ -700,13 +771,38 @@ if ($selected.Count -eq 0) {
 $installButton.Enabled = $false
 
 try {
-        foreach ($item in $selected) {
-            Install-WingetPackage `
-                -Id $item.Tag `
-                -Name $item.Text
+        try {
+            Ensure-WingetAvailable | Out-Null
+        }
+        catch {
+            Show-Status 'Nu s-a putut pregati Microsoft App Installer.'
+            [System.Windows.Forms.MessageBox]::Show(
+                $_.Exception.Message,
+                'Windows Toolkit - Eroare',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+            return
         }
 
-Show-Status 'Instalarea aplicatiilor s-a terminat.'
+        $failedApps = @()
+        foreach ($item in $selected) {
+            $installed = Install-WingetPackage `
+                -Id $item.Tag.Id `
+                -Name $item.Tag.Name `
+                -Architecture $item.Tag.Architecture
+
+            if (-not $installed) {
+                $failedApps += $item.Tag.Name
+            }
+        }
+
+        if ($failedApps.Count -gt 0) {
+            Show-Status "Instalare terminata. Esuate: $($failedApps -join ', ')"
+        }
+        else {
+            Show-Status 'Instalarea aplicatiilor s-a terminat.'
+        }
     }
     finally {
         $installButton.Enabled = $true
@@ -1111,10 +1207,16 @@ $tabPerformance.Text = 'Performance'
 [void]$tabs.TabPages.Add($tabPerformance)
 
 $performanceLabel = New-Object System.Windows.Forms.Label
-$performanceLabel.Text = 'Optiuni pentru performanta si alimentare:'
+$performanceLabel.Text = 'Alege un profil pentru performanta sau alimentare:'
 $performanceLabel.Location = New-Object System.Drawing.Point(25, 25)
 $performanceLabel.AutoSize = $true
 $tabPerformance.Controls.Add($performanceLabel)
+
+$performanceInfoLabel = New-Object System.Windows.Forms.Label
+$performanceInfoLabel.Text = 'Maximum Performance activeaza planul Ultimate (poate consuma mai multa baterie). Never modifica doar setarile la priza.'
+$performanceInfoLabel.Location = New-Object System.Drawing.Point(25, 45)
+$performanceInfoLabel.Size = New-Object System.Drawing.Size(530, 32)
+$tabPerformance.Controls.Add($performanceInfoLabel)
 
 # ==================================================
 # Backup si utilitare pentru setarile de alimentare
@@ -1132,6 +1234,22 @@ function Get-ActiveSchemeGuid {
         return $Matches[1]
     }
     return $null
+}
+
+function Refresh-PowerSettingsPage {
+    $activeScheme = Get-ActiveSchemeGuid
+    if (-not $activeScheme) {
+        throw 'Nu s-a putut identifica planul de alimentare activ pentru actualizarea setarilor Windows.'
+    }
+
+    & powercfg /setactive $activeScheme | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nu s-a putut reactiva planul de alimentare pentru actualizarea setarilor Windows (cod $LASTEXITCODE)."
+    }
+
+    Start-Process `
+        -FilePath 'ms-settings:powersleep' `
+        -ErrorAction Stop
 }
 
 function Get-PowerTimeouts {
@@ -1183,14 +1301,38 @@ Set-ItemProperty -Path $powerBackupPath -Name 'MonitorAC'   -Value $timeouts.Mon
 function Set-PowerTimeouts {
     param([hashtable]$Minutes)
 
-powercfg /change monitor-timeout-ac     $Minutes.Monitor[0]   | Out-Null
-    powercfg /change monitor-timeout-dc     $Minutes.Monitor[1]   | Out-Null
-    powercfg /change standby-timeout-ac     $Minutes.Standby[0]   | Out-Null
-    powercfg /change standby-timeout-dc     $Minutes.Standby[1]   | Out-Null
-    powercfg /change disk-timeout-ac        $Minutes.Disk[0]      | Out-Null
-    powercfg /change disk-timeout-dc        $Minutes.Disk[1]      | Out-Null
-    powercfg /change hibernate-timeout-ac   $Minutes.Hibernate[0] | Out-Null
-    powercfg /change hibernate-timeout-dc   $Minutes.Hibernate[1] | Out-Null
+    $settings = @(
+        [PSCustomObject]@{ Name = 'monitor-timeout-ac'; Value = $Minutes.Monitor[0] }
+        [PSCustomObject]@{ Name = 'monitor-timeout-dc'; Value = $Minutes.Monitor[1] }
+        [PSCustomObject]@{ Name = 'standby-timeout-ac'; Value = $Minutes.Standby[0] }
+        [PSCustomObject]@{ Name = 'standby-timeout-dc'; Value = $Minutes.Standby[1] }
+        [PSCustomObject]@{ Name = 'disk-timeout-ac'; Value = $Minutes.Disk[0] }
+        [PSCustomObject]@{ Name = 'disk-timeout-dc'; Value = $Minutes.Disk[1] }
+        [PSCustomObject]@{ Name = 'hibernate-timeout-ac'; Value = $Minutes.Hibernate[0] }
+        [PSCustomObject]@{ Name = 'hibernate-timeout-dc'; Value = $Minutes.Hibernate[1] }
+    )
+
+    foreach ($setting in $settings) {
+        & powercfg /change $setting.Name $setting.Value | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "powercfg nu a putut modifica setarea $($setting.Name) (cod $LASTEXITCODE)."
+        }
+    }
+}
+
+function Set-PowerTimeoutsNeverOnAc {
+    $settings = @(
+        'monitor-timeout-ac'
+        'standby-timeout-ac'
+        'hibernate-timeout-ac'
+    )
+
+    foreach ($setting in $settings) {
+        & powercfg /change $setting 0 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "powercfg nu a putut seta $setting la Never (cod $LASTEXITCODE)."
+        }
+    }
 }
 
 function Get-Or-Create-UltimateScheme {
@@ -1251,7 +1393,7 @@ return $true
 
 $maxButton = New-Object System.Windows.Forms.Button
 $maxButton.Text = 'Maximum Performance'
-$maxButton.Location = New-Object System.Drawing.Point(25, 65)
+$maxButton.Location = New-Object System.Drawing.Point(25, 85)
 $maxButton.Size = New-Object System.Drawing.Size(190, 40)
 $tabPerformance.Controls.Add($maxButton)
 
@@ -1264,10 +1406,14 @@ Save-PowerBackup
 $ultimate = Get-Or-Create-UltimateScheme
 
 if ($ultimate) {
-            powercfg /setactive $ultimate | Out-Null
+            & powercfg /setactive $ultimate | Out-Null
         }
         else {
-            powercfg /setactive SCHEME_MIN | Out-Null
+            & powercfg /setactive SCHEME_MIN | Out-Null
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nu s-a putut activa planul de performanta (cod $LASTEXITCODE)."
         }
 
 if (Test-HasBattery) {
@@ -1278,7 +1424,7 @@ if (Test-HasBattery) {
                 Hibernate = @(0, 180)
             }
 
-Show-Status 'Performanta maxima pe priza. Pe baterie: valori moderate pentru a proteja bateria.'
+Show-Status 'Planul Ultimate Performance este activ. La priza nu se opreste ecranul sau PC-ul; pe baterie, oprirea automata ramane activa.'
         }
         else {
             Set-PowerTimeouts @{
@@ -1288,8 +1434,10 @@ Show-Status 'Performanta maxima pe priza. Pe baterie: valori moderate pentru a p
                 Hibernate = @(0, 0)
             }
 
-Show-Status 'Performanta maxima activata. Monitorul, sleep-ul si discul nu se opresc.'
+Show-Status 'Planul Ultimate Performance este activ. Oprirea automata a ecranului si a PC-ului este dezactivata.'
         }
+
+        Refresh-PowerSettingsPage
     }
     catch {
         Show-Status 'Activarea performantei maxime a esuat.'
@@ -1307,7 +1455,7 @@ Show-Status 'Performanta maxima activata. Monitorul, sleep-ul si discul nu se op
 
 $balancedButton = New-Object System.Windows.Forms.Button
 $balancedButton.Text = 'Recommended Settings'
-$balancedButton.Location = New-Object System.Drawing.Point(230, 65)
+$balancedButton.Location = New-Object System.Drawing.Point(230, 85)
 $balancedButton.Size = New-Object System.Drawing.Size(190, 40)
 $tabPerformance.Controls.Add($balancedButton)
 
@@ -1317,7 +1465,10 @@ $balancedButton.Add_Click({
 
 Save-PowerBackup
 
-powercfg /setactive SCHEME_BALANCED | Out-Null
+        & powercfg /setactive SCHEME_BALANCED | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nu s-a putut activa planul Balanced (cod $LASTEXITCODE)."
+        }
 
 if (Test-HasBattery) {
             Set-PowerTimeouts @{
@@ -1336,7 +1487,8 @@ if (Test-HasBattery) {
             }
         }
 
-Show-Status 'Planul Balanced si setarile recomandate au fost activate.'
+        Refresh-PowerSettingsPage
+        Show-Status 'Planul Balanced si setarile recomandate au fost activate. Pagina Power & battery a fost actualizata.'
     }
     catch {
         Show-Status 'Activarea planului Balanced a esuat.'
@@ -1349,12 +1501,47 @@ Show-Status 'Planul Balanced si setarile recomandate au fost activate.'
 })
 
 # ==================================================
+# Never turn off while plugged in
+# ==================================================
+
+$pluggedNeverButton = New-Object System.Windows.Forms.Button
+$pluggedNeverButton.Text = 'Never (plugged in only)'
+$pluggedNeverButton.Location = New-Object System.Drawing.Point(25, 140)
+$pluggedNeverButton.Size = New-Object System.Drawing.Size(190, 40)
+$tabPerformance.Controls.Add($pluggedNeverButton)
+
+$pluggedNeverInfo = New-Object System.Windows.Forms.Label
+$pluggedNeverInfo.Text = 'La priza: ecranul, sleep-ul si hibernarea nu se activeaza automat. Pe baterie nu se schimba nimic.'
+$pluggedNeverInfo.Location = New-Object System.Drawing.Point(230, 145)
+$pluggedNeverInfo.Size = New-Object System.Drawing.Size(330, 40)
+$tabPerformance.Controls.Add($pluggedNeverInfo)
+
+$pluggedNeverButton.Add_Click({
+    try {
+        Show-Status 'Se dezactiveaza oprirea automata doar la priza...'
+        Save-PowerBackup
+        Set-PowerTimeoutsNeverOnAc
+        Refresh-PowerSettingsPage
+        Show-Status 'La priza: ecranul, sleep-ul si hibernarea sunt pe Never. Bateria nu a fost modificata; pagina Power & battery a fost actualizata.'
+    }
+    catch {
+        Show-Status 'Setarea Never pentru alimentarea la priza a esuat.'
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Windows Toolkit - Eroare',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+})
+
+# ==================================================
 # Restore Initial Settings
 # ==================================================
 
 $restorePowerButton = New-Object System.Windows.Forms.Button
 $restorePowerButton.Text = 'Restore Initial Settings'
-$restorePowerButton.Location = New-Object System.Drawing.Point(25, 115)
+$restorePowerButton.Location = New-Object System.Drawing.Point(25, 195)
 $restorePowerButton.Size = New-Object System.Drawing.Size(190, 40)
 $tabPerformance.Controls.Add($restorePowerButton)
 
@@ -1365,7 +1552,8 @@ $restorePowerButton.Add_Click({
 $restored = Restore-PowerBackup
 
 if ($restored) {
-            Show-Status 'Setarile initiale de alimentare au fost restaurate.'
+            Refresh-PowerSettingsPage
+            Show-Status 'Setarile initiale au fost restaurate. Pagina Power & battery a fost actualizata.'
         }
         else {
             [System.Windows.Forms.MessageBox]::Show(
