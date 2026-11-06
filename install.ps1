@@ -336,6 +336,10 @@ Show-Status -Message 'Descarcarea s-a terminat.'
 # Creare shortcut pe Desktop (fara dubluri + fallback pe .exe)
 # ==============================
 
+# ==============================
+# Creare shortcut pe Desktop (fara dubluri + fallback pe .exe)
+# ==============================
+
 function New-DesktopShortcutFromStartMenu {
     param(
         [Parameter(Mandatory = $true)]
@@ -343,7 +347,6 @@ function New-DesktopShortcutFromStartMenu {
     )
 
     try {
-        # Mapare pentru aplicatiile care au nume diferit in Start Menu / .exe sau nu necesita shortcut
         $appShortcutMap = @{
             'Google Chrome'                       = @{ Patterns = @('Google Chrome'); Exe = @('chrome.exe') }
             'Brave'                               = @{ Patterns = @('Brave'); Exe = @('brave.exe') }
@@ -405,7 +408,6 @@ function New-DesktopShortcutFromStartMenu {
 
         $wshShell = New-Object -ComObject WScript.Shell
 
-        # Functie locala pentru verificarea numelui sau a executabilului tinta (.exe)
         $testShortcutMatch = {
             param($Item)
             foreach ($pattern in $searchPatterns) {
@@ -442,7 +444,7 @@ function New-DesktopShortcutFromStartMenu {
             }
         }
 
-        # Daca exista deja dubluri (ex: una pe Public Desktop si una pe User Desktop), stergem dublura de pe User Desktop
+        # Daca exista dubluri, stergem dublura de pe User Desktop
         if ($existingDesktopShortcuts.Count -gt 1) {
             $publicMatch = $existingDesktopShortcuts | Where-Object { $_.DirectoryName -eq $publicDesktop } | Select-Object -First 1
             $userMatches = @($existingDesktopShortcuts | Where-Object { $_.DirectoryName -eq $userDesktop })
@@ -461,12 +463,11 @@ function New-DesktopShortcutFromStartMenu {
             }
         }
 
-        # Daca exista deja un shortcut pe oricare Desktop, ne oprim aici ca sa nu il dublam
         if ($existingDesktopShortcuts.Count -ge 1) {
             return 'AlreadyExists'
         }
 
-        # 2. Daca nu exista pe Desktop, il cautam in Start Menu (User + ProgramData)
+        # 2. Cautam in Start Menu (User + ProgramData)
         $startMenuPaths = @(
             (Join-Path -Path $env:APPDATA -ChildPath 'Microsoft\Windows\Start Menu\Programs'),
             (Join-Path -Path $env:ProgramData -ChildPath 'Microsoft\Windows\Start Menu\Programs')
@@ -507,8 +508,7 @@ function New-DesktopShortcutFromStartMenu {
             return 'Created'
         }
 
-        # 3. Fallback: Daca aplicatia nu are shortcut nici in Start Menu (ex: Rufus sau aplicatii portabile),
-        # cautam direct executabilul (.exe) si cream shortcut-ul pe Desktop
+        # 3. Fallback: cautam direct executabilul (.exe) si cream shortcut-ul pe Desktop
         if ($exePatterns.Count -gt 0) {
             $searchRoots = @(
                 $env:ProgramFiles,
@@ -550,6 +550,120 @@ function New-DesktopShortcutFromStartMenu {
         throw "Nu s-a putut crea shortcut-ul pentru ${AppName}: $($_.Exception.Message)"
     }
 }
+
+# ==============================
+# Instalare aplicatie prin winget
+# ==============================
+
+function Ensure-WingetAvailable {
+    $wingetCommand = Get-Command `
+        -Name 'winget.exe' `
+        -ErrorAction SilentlyContinue
+
+    if ($null -ne $wingetCommand) {
+        return $wingetCommand.Source
+    }
+
+    $installerPath = Join-Path `
+        -Path ([System.IO.Path]::GetTempPath()) `
+        -ChildPath ('WindowsToolkit-AppInstaller_{0}.msixbundle' -f [Guid]::NewGuid().ToString('N'))
+    $storeUrl = 'https://apps.microsoft.com/detail/9nblggh4nns1'
+    $registrationError = $null
+
+    try {
+        Show-Status -Message 'Se configureaza Microsoft App Installer...'
+
+        try {
+            Add-AppxPackage `
+                -RegisterByFamilyName `
+                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
+                -ErrorAction Stop
+        }
+        catch {
+            $registrationError = $_.Exception.Message
+        }
+
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            $wingetCommand = Get-Command `
+                -Name 'winget.exe' `
+                -ErrorAction SilentlyContinue
+
+            if ($null -ne $wingetCommand) {
+                return $wingetCommand.Source
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        Invoke-RemoteFileDownload `
+            -Url 'https://aka.ms/getwinget' `
+            -Destination $installerPath | Out-Null
+
+        Show-Status -Message 'Se instaleaza Microsoft App Installer...'
+        Add-AppxPackage `
+            -Path $installerPath `
+            -ErrorAction Stop
+
+        for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            $wingetCommand = Get-Command `
+                -Name 'winget.exe' `
+                -ErrorAction SilentlyContinue
+
+            if ($null -ne $wingetCommand) {
+                break
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
+        if ($null -eq $wingetCommand) {
+            Add-AppxPackage `
+                -RegisterByFamilyName `
+                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
+                -ErrorAction Stop
+
+            for ($attempt = 0; $attempt -lt 5; $attempt++) {
+                $wingetCommand = Get-Command `
+                    -Name 'winget.exe' `
+                    -ErrorAction SilentlyContinue
+
+                if ($null -ne $wingetCommand) {
+                    break
+                }
+
+                Start-Sleep -Seconds 1
+            }
+        }
+
+        if ($null -eq $wingetCommand) {
+            throw 'App Installer a fost instalat, dar winget nu este disponibil in aceasta sesiune.'
+        }
+
+        return $wingetCommand.Source
+    }
+    catch {
+        $details = $_.Exception.Message
+        if ($registrationError) {
+            $details = "$details`r`nInregistrarea initiala: $registrationError"
+        }
+
+        throw "Nu s-a putut instala sau configura automat Microsoft App Installer. $details`r`nInstaleaza-l din Microsoft Store: $storeUrl"
+    }
+    finally {
+        if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
+            try {
+                Remove-Item `
+                    -LiteralPath $installerPath `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Nu s-a putut sterge pachetul temporar $installerPath : $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 
 function Install-WingetPackage {
     param(
