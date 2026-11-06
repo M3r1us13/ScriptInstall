@@ -332,186 +332,222 @@ Show-Status -Message 'Descarcarea s-a terminat.'
 # Creare shortcut pe Desktop
 # ==============================
 
+# ==============================
+# Creare shortcut pe Desktop (fara dubluri + fallback pe .exe)
+# ==============================
+
 function New-DesktopShortcutFromStartMenu {
     param(
         [Parameter(Mandatory = $true)]
         [string]$AppName
     )
 
-try {
-        $desktopPath = [Environment]::GetFolderPath('Desktop')
+    try {
+        # Mapare pentru aplicatiile care au nume diferit in Start Menu / .exe sau nu necesita shortcut
+        $appShortcutMap = @{
+            'Google Chrome'                       = @{ Patterns = @('Google Chrome'); Exe = @('chrome.exe') }
+            'Brave'                               = @{ Patterns = @('Brave'); Exe = @('brave.exe') }
+            'Adobe Acrobat Reader'                = @{ Patterns = @('Adobe Acrobat*', 'Acrobat Reader*'); Exe = @('Acrobat.exe', 'AcroRd32.exe') }
+            'TeamViewer'                          = @{ Patterns = @('TeamViewer'); Exe = @('TeamViewer.exe') }
+            'UltraViewer'                         = @{ Patterns = @('UltraViewer'); Exe = @('UltraViewer_Desktop.exe') }
+            'AnyDesk'                             = @{ Patterns = @('AnyDesk'); Exe = @('AnyDesk.exe') }
+            'WinRAR'                              = @{ Patterns = @('WinRAR'); Exe = @('WinRAR.exe') }
+            'VLC Media Player'                    = @{ Patterns = @('VLC media player', 'VLC'); Exe = @('vlc.exe') }
+            '7-Zip'                               = @{ Patterns = @('7-Zip File Manager', '7-Zip'); Exe = @('7zFM.exe') }
+            'Spotify'                             = @{ Patterns = @('Spotify'); Exe = @('Spotify.exe') }
+            'Notepad++'                           = @{ Patterns = @('Notepad++'); Exe = @('notepad++.exe') }
+            'Java 8 x64 (Temurin / AdoptOpenJDK)' = @{ Skip = $true }
+            'Google Earth Pro'                    = @{ Patterns = @('Google Earth Pro'); Exe = @('googleearth.exe') }
+            'Winamp'                              = @{ Patterns = @('Winamp'); Exe = @('winamp.exe') }
+            'Malwarebytes'                        = @{ Patterns = @('Malwarebytes'); Exe = @('Malwarebytes.exe') }
+            'Steam'                               = @{ Patterns = @('Steam'); Exe = @('steam.exe') }
+            'Hard Disk Sentinel Standard'         = @{ Patterns = @('Hard Disk Sentinel*'); Exe = @('HDSentinel.exe') }
+            'CrystalDiskInfo'                     = @{ Patterns = @('CrystalDiskInfo*'); Exe = @('DiskInfo64.exe', 'DiskInfo32.exe') }
+            'HWiNFO'                              = @{ Patterns = @('HWiNFO*'); Exe = @('HWiNFO64.exe', 'HWiNFO32.exe') }
+            'CPU-Z'                               = @{ Patterns = @('*CPU-Z*'); Exe = @('cpuz.exe') }
+            'GPU-Z'                               = @{ Patterns = @('*GPU-Z*'); Exe = @('GPU-Z*.exe') }
+            'CrystalDiskMark'                     = @{ Patterns = @('CrystalDiskMark*'); Exe = @('DiskMark64.exe', 'DiskMark32.exe') }
+            'Rufus'                               = @{ Patterns = @('Rufus*'); Exe = @('rufus*.exe') }
+            'Everything'                          = @{ Patterns = @('Everything'); Exe = @('Everything.exe') }
+            'TreeSize Free'                       = @{ Patterns = @('TreeSize Free*'); Exe = @('TreeSizeFree.exe') }
+            'Revo Uninstaller'                    = @{ Patterns = @('Revo Uninstaller*'); Exe = @('RevoUnin.exe') }
+        }
 
-if ([string]::IsNullOrWhiteSpace($desktopPath)) {
+        $meta = $appShortcutMap[$AppName]
+        if ($null -ne $meta -and $meta.Skip) {
+            return 'Skipped'
+        }
+
+        $searchPatterns = if ($null -ne $meta -and $meta.Patterns) {
+            $meta.Patterns
+        }
+        else {
+            @("*$AppName*")
+        }
+
+        $exePatterns = if ($null -ne $meta -and $meta.Exe) {
+            $meta.Exe
+        }
+        else {
+            @()
+        }
+
+        $userDesktop = [Environment]::GetFolderPath('Desktop')
+        $publicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+
+        if ([string]::IsNullOrWhiteSpace($userDesktop)) {
+            return 'NotFound'
+        }
+
+        $desktopPaths = @($userDesktop, $publicDesktop) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
+            Select-Object -Unique
+
+        $wshShell = New-Object -ComObject WScript.Shell
+
+        # Functie locala pentru verificarea numelui sau a executabilului tinta (.exe)
+        $testShortcutMatch = {
+            param($Item)
+            foreach ($pattern in $searchPatterns) {
+                if ($Item.BaseName -like $pattern) {
+                    return $true
+                }
+            }
+            if ($Item.Extension -eq '.lnk' -and $exePatterns.Count -gt 0) {
+                try {
+                    $lnk = $wshShell.CreateShortcut($Item.FullName)
+                    if ($lnk.TargetPath) {
+                        $targetLeaf = [System.IO.Path]::GetFileName($lnk.TargetPath)
+                        foreach ($exePattern in $exePatterns) {
+                            if ($targetLeaf -like $exePattern) {
+                                return $true
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
             return $false
         }
 
-$startMenuPaths = @(
-            (
-                Join-Path `
-                    -Path $env:APPDATA `
-                    -ChildPath 'Microsoft\Windows\Start Menu\Programs'
-            ),
-            (
-                Join-Path `
-                    -Path $env:ProgramData `
-                    -ChildPath 'Microsoft\Windows\Start Menu\Programs'
-            )
-        )
+        # 1. Verificam daca shortcut-ul exista deja pe User Desktop sau pe Public Desktop
+        $existingDesktopShortcuts = @()
+        foreach ($dPath in $desktopPaths) {
+            $items = Get-ChildItem -LiteralPath $dPath -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in @('.lnk', '.url') }
+            foreach ($item in $items) {
+                if (& $testShortcutMatch $item) {
+                    $existingDesktopShortcuts += $item
+                }
+            }
+        }
 
-$shortcut = $null
+        # Daca exista deja dubluri (ex: una pe Public Desktop si una pe User Desktop), stergem dublura de pe User Desktop
+        if ($existingDesktopShortcuts.Count -gt 1) {
+            $publicMatch = $existingDesktopShortcuts | Where-Object { $_.DirectoryName -eq $publicDesktop } | Select-Object -First 1
+            $userMatches = @($existingDesktopShortcuts | Where-Object { $_.DirectoryName -eq $userDesktop })
 
-foreach ($startMenuPath in $startMenuPaths) {
-            if (-not (Test-Path -LiteralPath $startMenuPath)) {
-                continue
+            if ($null -ne $publicMatch -and $userMatches.Count -gt 0) {
+                foreach ($dup in $userMatches) {
+                    Remove-Item -LiteralPath $dup.FullName -Force -ErrorAction SilentlyContinue
+                }
+                return 'AlreadyExists'
+            }
+            elseif ($userMatches.Count -gt 1) {
+                for ($idx = 1; $idx -lt $userMatches.Count; $idx++) {
+                    Remove-Item -LiteralPath $userMatches[$idx].FullName -Force -ErrorAction SilentlyContinue
+                }
+                return 'AlreadyExists'
+            }
+        }
+
+        # Daca exista deja un shortcut pe oricare Desktop, ne oprim aici ca sa nu il dublam
+        if ($existingDesktopShortcuts.Count -ge 1) {
+            return 'AlreadyExists'
+        }
+
+        # 2. Daca nu exista pe Desktop, il cautam in Start Menu (User + ProgramData)
+        $startMenuPaths = @(
+            (Join-Path -Path $env:APPDATA -ChildPath 'Microsoft\Windows\Start Menu\Programs'),
+            (Join-Path -Path $env:ProgramData -ChildPath 'Microsoft\Windows\Start Menu\Programs')
+        ) | Where-Object { Test-Path -LiteralPath $_ }
+
+        $excludedWords = @('*uninstall*', '*dezinstalare*', '*help*', '*manual*', '*readme*', '*website*', '*license*', '*diagnostic*', '*safe mode*', '*reset*')
+        $foundStartMenuShortcut = $null
+
+        foreach ($startMenuPath in $startMenuPaths) {
+            $allShortcuts = Get-ChildItem -LiteralPath $startMenuPath -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $name = $_.BaseName
+                    $isExcluded = $false
+                    foreach ($ex in $excludedWords) {
+                        if ($name -like $ex) {
+                            $isExcluded = $true
+                            break
+                        }
+                    }
+                    -not $isExcluded
+                }
+
+            foreach ($item in $allShortcuts) {
+                if (& $testShortcutMatch $item) {
+                    $foundStartMenuShortcut = $item
+                    break
+                }
             }
 
-$shortcut = Get-ChildItem `
-                -Path $startMenuPath `
-                -Filter '*.lnk' `
-                -File `
-                -Recurse `
-                -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.BaseName -like "*$AppName*"
-                } |
-                Select-Object -First 1
-
-if ($null -ne $shortcut) {
+            if ($null -ne $foundStartMenuShortcut) {
                 break
             }
         }
 
-if ($null -eq $shortcut) {
-            return $false
+        if ($null -ne $foundStartMenuShortcut) {
+            $desktopShortcut = Join-Path -Path $userDesktop -ChildPath $foundStartMenuShortcut.Name
+            Copy-Item -LiteralPath $foundStartMenuShortcut.FullName -Destination $desktopShortcut -Force -ErrorAction Stop
+            return 'Created'
         }
 
-$desktopShortcut = Join-Path `
-            -Path $desktopPath `
-            -ChildPath $shortcut.Name
+        # 3. Fallback: Daca aplicatia nu are shortcut nici in Start Menu (ex: Rufus sau aplicatii portabile),
+        # cautam direct executabilul (.exe) si cream shortcut-ul pe Desktop
+        if ($exePatterns.Count -gt 0) {
+            $searchRoots = @(
+                $env:ProgramFiles,
+                ${env:ProgramFiles(x86)},
+                (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs'),
+                (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\WinGet\Packages')
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
 
-Copy-Item `
-            -Path $shortcut.FullName `
-            -Destination $desktopShortcut `
-            -Force `
-            -ErrorAction Stop
+            $foundExe = $null
+            foreach ($root in $searchRoots) {
+                foreach ($exePattern in $exePatterns) {
+                    $foundExe = Get-ChildItem -LiteralPath $root -Filter $exePattern -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.FullName -notmatch 'Uninstall|Updater|CrashReport' } |
+                        Select-Object -First 1
+                    if ($null -ne $foundExe) {
+                        break
+                    }
+                }
+                if ($null -ne $foundExe) {
+                    break
+                }
+            }
 
-return $true
+            if ($null -ne $foundExe) {
+                $safeShortcutName = ($AppName -replace '[\\/:*?"<>|]', '').Trim() + '.lnk'
+                $desktopShortcutPath = Join-Path -Path $userDesktop -ChildPath $safeShortcutName
+                $newShortcut = $wshShell.CreateShortcut($desktopShortcutPath)
+                $newShortcut.TargetPath = $foundExe.FullName
+                $newShortcut.WorkingDirectory = $foundExe.DirectoryName
+                $newShortcut.IconLocation = "$($foundExe.FullName),0"
+                $newShortcut.Save()
+                return 'Created'
+            }
+        }
+
+        return 'NotFound'
     }
     catch {
         throw "Nu s-a putut crea shortcut-ul pentru ${AppName}: $($_.Exception.Message)"
-    }
-}
-
-# ==============================
-# Instalare aplicatie prin winget
-# ==============================
-
-function Ensure-WingetAvailable {
-    $wingetCommand = Get-Command `
-        -Name 'winget.exe' `
-        -ErrorAction SilentlyContinue
-
-    if ($null -ne $wingetCommand) {
-        return $wingetCommand.Source
-    }
-
-    $installerPath = Join-Path `
-        -Path ([System.IO.Path]::GetTempPath()) `
-        -ChildPath ('WindowsToolkit-AppInstaller_{0}.msixbundle' -f [Guid]::NewGuid().ToString('N'))
-    $storeUrl = 'https://apps.microsoft.com/detail/9nblggh4nns1'
-    $registrationError = $null
-
-    try {
-        Show-Status -Message 'Se configureaza Microsoft App Installer...'
-
-        try {
-            Add-AppxPackage `
-                -RegisterByFamilyName `
-                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
-                -ErrorAction Stop
-        }
-        catch {
-            $registrationError = $_.Exception.Message
-        }
-
-        for ($attempt = 0; $attempt -lt 5; $attempt++) {
-            $wingetCommand = Get-Command `
-                -Name 'winget.exe' `
-                -ErrorAction SilentlyContinue
-
-            if ($null -ne $wingetCommand) {
-                return $wingetCommand.Source
-            }
-
-            Start-Sleep -Seconds 1
-        }
-
-        Invoke-RemoteFileDownload `
-            -Url 'https://aka.ms/getwinget' `
-            -Destination $installerPath | Out-Null
-
-        Show-Status -Message 'Se instaleaza Microsoft App Installer...'
-        Add-AppxPackage `
-            -Path $installerPath `
-            -ErrorAction Stop
-
-        for ($attempt = 0; $attempt -lt 10; $attempt++) {
-            $wingetCommand = Get-Command `
-                -Name 'winget.exe' `
-                -ErrorAction SilentlyContinue
-
-            if ($null -ne $wingetCommand) {
-                break
-            }
-
-            Start-Sleep -Seconds 1
-        }
-
-        if ($null -eq $wingetCommand) {
-            Add-AppxPackage `
-                -RegisterByFamilyName `
-                -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' `
-                -ErrorAction Stop
-
-            for ($attempt = 0; $attempt -lt 5; $attempt++) {
-                $wingetCommand = Get-Command `
-                    -Name 'winget.exe' `
-                    -ErrorAction SilentlyContinue
-
-                if ($null -ne $wingetCommand) {
-                    break
-                }
-
-                Start-Sleep -Seconds 1
-            }
-        }
-
-        if ($null -eq $wingetCommand) {
-            throw 'App Installer a fost instalat, dar winget nu este disponibil in aceasta sesiune.'
-        }
-
-        return $wingetCommand.Source
-    }
-    catch {
-        $details = $_.Exception.Message
-        if ($registrationError) {
-            $details = "$details`r`nInregistrarea initiala: $registrationError"
-        }
-
-        throw "Nu s-a putut instala sau configura automat Microsoft App Installer. $details`r`nInstaleaza-l din Microsoft Store: $storeUrl"
-    }
-    finally {
-        if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
-            try {
-                Remove-Item `
-                    -LiteralPath $installerPath `
-                    -Force `
-                    -ErrorAction Stop
-            }
-            catch {
-                Write-Warning "Nu s-a putut sterge pachetul temporar $installerPath : $($_.Exception.Message)"
-            }
-        }
     }
 }
 
